@@ -39,6 +39,21 @@ cd DoublonsIDPP
 pip3 install -r requirements.txt --user
 ```
 
+### Installation optionnelle sur le bureau (Ubuntu)
+
+Pour ajouter l'application au menu des applications :
+
+```bash
+# Copier le fichier .desktop vers les applications
+cp DoublonsIDPP.desktop ~/.local/share/applications/
+
+# Mettre à jour la base de données des applications
+update-desktop-database ~/.local/share/applications/
+
+# Rendre le lanceur exécutable
+chmod +x ~/.local/share/applications/DoublonsIDPP.desktop
+```
+
 ## Utilisation
 
 ### Interface graphique (recommandée)

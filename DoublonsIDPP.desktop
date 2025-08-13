@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=DoublonsIDPP
+Comment=Interface graphique pour le traitement des doublons de signalisations
+Comment[en]=GUI for duplicate reports processing
+Exec=/home/runner/work/DoublonsIDPP/DoublonsIDPP/run_gui.sh
+Icon=application-x-executable
+Terminal=false
+Categories=Office;Development;
+StartupNotify=true
