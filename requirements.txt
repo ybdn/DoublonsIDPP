@@ -2,4 +2,5 @@
 numpy>=2.2.2,<2.4
 pandas>=2.3.1,<2.4
 PyQt5>=5.15.9,<5.16
+matplolib >= 3
 # PyQt5-Qt5 et PyQt5-sip sont installés automatiquement comme dépendances
