@@ -465,24 +465,62 @@ def traiter_doublons(chemin_fichier, dossier_exports=None):
     print(f"- Groupes résolus par Tri 3.3 (numéro signalisation): {compteur_tri_3_3}")
     
     # 4. Reconstituer le DataFrame complet
-    # Identifier les signalisations qui n'ont pas de doublons
-    cles_groupes_doublons = set()
-    for cle in groupes_doublons.keys():
-        # Extraire l'identifiant GASPARD de la clé du groupe
-        identifiant_gaspard = cle[0]
-        cles_groupes_doublons.add(identifiant_gaspard)
-    
-    # Filtrer les signalisations sans doublons (en utilisant IDENTIFIANT_GASPARD_NORM si disponible)
-    if 'IDENTIFIANT_GASPARD_NORM' in df_a_traiter.columns:
-        signalisations_sans_doublons = df_a_traiter[~df_a_traiter['IDENTIFIANT_GASPARD_NORM'].isin(cles_groupes_doublons)]
+    # IMPORTANT: auparavant on excluait les lignes sur la base du seul IDENTIFIANT_GASPARD.
+    # Cela supprimait par erreur des signalisations partageant l'IDPP mais n'ayant PAS les mêmes autres critères,
+    # d'où la perte de 2 lignes (écart 3271 -> 3269). On utilise maintenant la clé composite complète.
+    # Construire l'ensemble des clés composites réellement considérées comme doublons
+    cles_composites_doublons = set(groupes_doublons.keys())
+
+    # S'assurer que la colonne 'cle_groupe' existe (créée dans regrouper_doublons)
+    if 'cle_groupe' not in df_a_traiter.columns:
+        # Re-création défensive (ne devrait pas arriver sauf modification future)
+        df_a_traiter['IDENTIFIANT_GASPARD_NORM'] = df_a_traiter['IDENTIFIANT_GASPARD'].astype(str)
+        df_a_traiter['NUMERO_PERSONNE_NORM'] = df_a_traiter['NUMERO_PERSONNE'].astype(str)
+        df_a_traiter['NOM_NORM'] = df_a_traiter['NOM'].astype(str).str.upper().str.strip()
+        df_a_traiter['PRENOM_NORM'] = df_a_traiter['PRENOM'].astype(str).str.upper().str.strip()
+        df_a_traiter['DATE_NAISSANCE_NORM'] = df_a_traiter['DATE_NAISSANCE_MIN'].astype(str).str.strip()
+        df_a_traiter['cle_groupe'] = df_a_traiter.apply(
+            lambda row: (
+                row['IDENTIFIANT_GASPARD_NORM'],
+                row['NUMERO_PERSONNE_NORM'],
+                (row['NOM_NORM'], row['PRENOM_NORM'], row['DATE_NAISSANCE_NORM'])
+            ), axis=1
+        )
+
+    # Les signalisations sans doublons sont celles dont la clé composite n'appartient pas aux clés de groupes >1
+    signalisations_sans_doublons = df_a_traiter[~df_a_traiter['cle_groupe'].isin(cles_composites_doublons)].copy()
+
+    # Audit: détection d'éventuelles pertes par l'ancien mécanisme
+    nb_attendu_avant_concat = len(df_a_traiter) + len(df_pn)
+    # Concat provisoire pour vérifier pertes
+    df_concat_prov = pd.concat([signalisations_sans_doublons] + groupes_traites + [df_pn]) if groupes_traites else pd.concat([signalisations_sans_doublons, df_pn])
+    ecart = nb_attendu_avant_concat - len(df_concat_prov)
+    if ecart != 0:
+        print(f"[ALERTE COHÉRENCE] Écart de {ecart} ligne(s) après reconstruction (attendu {nb_attendu_avant_concat}, obtenu {len(df_concat_prov)}).")
+        # Identifier les clés composites couvertes par un groupe (IDPP) mais non présentes dans la concat
+        # (Cas résolu par cette nouvelle approche, mais on garde le log au cas où)
     else:
-        signalisations_sans_doublons = df_a_traiter[~df_a_traiter['IDENTIFIANT_GASPARD'].isin(cles_groupes_doublons)]
+        print("Vérification cohérence: aucune perte de ligne lors de la reconstruction (OK).")
     
     # Concaténer les signalisations sans doublons, les groupes traités, et les signalisations PN exclues
     if groupes_traites:
         df_traite = pd.concat([signalisations_sans_doublons] + groupes_traites + [df_pn])
     else:
         df_traite = pd.concat([signalisations_sans_doublons, df_pn])
+
+    # Rattrapage de sécurité: toute ligne sans REGLE_APPLIQUEE (hors PN) reçoit une règle de fallback
+    masque_fallback = (df_traite['ID_GROUPE'] != 'Exclus_PN') & df_traite['REGLE_APPLIQUEE'].isna()
+    if masque_fallback.any():
+        print(f"[RATTRAPAGE] {masque_fallback.sum()} ligne(s) sans 'REGLE_APPLIQUEE' détectée(s). Attribution d'une règle de secours.")
+        df_traite.loc[masque_fallback, 'REGLE_APPLIQUEE'] = 'Rattrapage: classification manquante'
+        df_traite.loc[masque_fallback, 'DETAIL_REGLE'] = "Décision par défaut suite à absence de règle (à investiguer)." 
+
+    # Audit final: cohérence des totaux
+    nb_final = len(df_traite)
+    if nb_final != nb_attendu_avant_concat:
+        print(f"[ALERTE FINALE] Taille finale {nb_final} différente du total attendu {nb_attendu_avant_concat}.")
+    else:
+        print(f"Reconstruction finale OK: {nb_final} lignes (attendu = obtenu).")
     
     # Stocker les statistiques pour le résumé
     df_traite.attrs['nb_gn'] = nb_gn
