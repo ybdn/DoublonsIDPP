@@ -140,4 +140,8 @@ tmp/
 
 # Fichiers de sortie
 *.html
-*.txt
+
+
+# macOS metadata
+.DS_Store
+icons/.DS_Store
