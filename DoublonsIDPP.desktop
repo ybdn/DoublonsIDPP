@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Doublons IDPP
+GenericName=Détection de doublons IDPP
+Comment=Interface graphique pour le traitement des doublons de signalisations GASPARD
+Comment[en]=GUI for duplicate reports processing
+Exec=doublons-idpp %F
+TryExec=doublons-idpp
+Icon=doublons-idpp
+Terminal=false
+Categories=Office;Development;
+StartupNotify=true

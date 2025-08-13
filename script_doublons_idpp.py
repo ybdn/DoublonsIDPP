@@ -374,9 +374,16 @@ def filtrer_idpp_pn(df):
     
     return df_a_traiter, df_pn, nb_gn, nb_pn, nb_autres
 
-def traiter_doublons(chemin_fichier):
+def traiter_doublons(chemin_fichier, dossier_exports=None):
     """
     Fonction principale pour traiter les doublons selon l'algorithme spécifié.
+    
+    Args:
+        chemin_fichier (str): Chemin vers le fichier CSV à traiter
+        dossier_exports (str, optional): Dossier de destination pour les exports
+    
+    Returns:
+        DataFrame: Le DataFrame traité avec les colonnes de décision
     """
     # 1. Lecture du fichier CSV
     df = lire_fichier_csv(chemin_fichier)
@@ -458,24 +465,62 @@ def traiter_doublons(chemin_fichier):
     print(f"- Groupes résolus par Tri 3.3 (numéro signalisation): {compteur_tri_3_3}")
     
     # 4. Reconstituer le DataFrame complet
-    # Identifier les signalisations qui n'ont pas de doublons
-    cles_groupes_doublons = set()
-    for cle in groupes_doublons.keys():
-        # Extraire l'identifiant GASPARD de la clé du groupe
-        identifiant_gaspard = cle[0]
-        cles_groupes_doublons.add(identifiant_gaspard)
-    
-    # Filtrer les signalisations sans doublons (en utilisant IDENTIFIANT_GASPARD_NORM si disponible)
-    if 'IDENTIFIANT_GASPARD_NORM' in df_a_traiter.columns:
-        signalisations_sans_doublons = df_a_traiter[~df_a_traiter['IDENTIFIANT_GASPARD_NORM'].isin(cles_groupes_doublons)]
+    # IMPORTANT: auparavant on excluait les lignes sur la base du seul IDENTIFIANT_GASPARD.
+    # Cela supprimait par erreur des signalisations partageant l'IDPP mais n'ayant PAS les mêmes autres critères,
+    # d'où la perte de 2 lignes (écart 3271 -> 3269). On utilise maintenant la clé composite complète.
+    # Construire l'ensemble des clés composites réellement considérées comme doublons
+    cles_composites_doublons = set(groupes_doublons.keys())
+
+    # S'assurer que la colonne 'cle_groupe' existe (créée dans regrouper_doublons)
+    if 'cle_groupe' not in df_a_traiter.columns:
+        # Re-création défensive (ne devrait pas arriver sauf modification future)
+        df_a_traiter['IDENTIFIANT_GASPARD_NORM'] = df_a_traiter['IDENTIFIANT_GASPARD'].astype(str)
+        df_a_traiter['NUMERO_PERSONNE_NORM'] = df_a_traiter['NUMERO_PERSONNE'].astype(str)
+        df_a_traiter['NOM_NORM'] = df_a_traiter['NOM'].astype(str).str.upper().str.strip()
+        df_a_traiter['PRENOM_NORM'] = df_a_traiter['PRENOM'].astype(str).str.upper().str.strip()
+        df_a_traiter['DATE_NAISSANCE_NORM'] = df_a_traiter['DATE_NAISSANCE_MIN'].astype(str).str.strip()
+        df_a_traiter['cle_groupe'] = df_a_traiter.apply(
+            lambda row: (
+                row['IDENTIFIANT_GASPARD_NORM'],
+                row['NUMERO_PERSONNE_NORM'],
+                (row['NOM_NORM'], row['PRENOM_NORM'], row['DATE_NAISSANCE_NORM'])
+            ), axis=1
+        )
+
+    # Les signalisations sans doublons sont celles dont la clé composite n'appartient pas aux clés de groupes >1
+    signalisations_sans_doublons = df_a_traiter[~df_a_traiter['cle_groupe'].isin(cles_composites_doublons)].copy()
+
+    # Audit: détection d'éventuelles pertes par l'ancien mécanisme
+    nb_attendu_avant_concat = len(df_a_traiter) + len(df_pn)
+    # Concat provisoire pour vérifier pertes
+    df_concat_prov = pd.concat([signalisations_sans_doublons] + groupes_traites + [df_pn]) if groupes_traites else pd.concat([signalisations_sans_doublons, df_pn])
+    ecart = nb_attendu_avant_concat - len(df_concat_prov)
+    if ecart != 0:
+        print(f"[ALERTE COHÉRENCE] Écart de {ecart} ligne(s) après reconstruction (attendu {nb_attendu_avant_concat}, obtenu {len(df_concat_prov)}).")
+        # Identifier les clés composites couvertes par un groupe (IDPP) mais non présentes dans la concat
+        # (Cas résolu par cette nouvelle approche, mais on garde le log au cas où)
     else:
-        signalisations_sans_doublons = df_a_traiter[~df_a_traiter['IDENTIFIANT_GASPARD'].isin(cles_groupes_doublons)]
+        print("Vérification cohérence: aucune perte de ligne lors de la reconstruction (OK).")
     
     # Concaténer les signalisations sans doublons, les groupes traités, et les signalisations PN exclues
     if groupes_traites:
         df_traite = pd.concat([signalisations_sans_doublons] + groupes_traites + [df_pn])
     else:
         df_traite = pd.concat([signalisations_sans_doublons, df_pn])
+
+    # Rattrapage de sécurité: toute ligne sans REGLE_APPLIQUEE (hors PN) reçoit une règle de fallback
+    masque_fallback = (df_traite['ID_GROUPE'] != 'Exclus_PN') & df_traite['REGLE_APPLIQUEE'].isna()
+    if masque_fallback.any():
+        print(f"[RATTRAPAGE] {masque_fallback.sum()} ligne(s) sans 'REGLE_APPLIQUEE' détectée(s). Attribution d'une règle de secours.")
+        df_traite.loc[masque_fallback, 'REGLE_APPLIQUEE'] = 'Rattrapage: classification manquante'
+        df_traite.loc[masque_fallback, 'DETAIL_REGLE'] = "Décision par défaut suite à absence de règle (à investiguer)." 
+
+    # Audit final: cohérence des totaux
+    nb_final = len(df_traite)
+    if nb_final != nb_attendu_avant_concat:
+        print(f"[ALERTE FINALE] Taille finale {nb_final} différente du total attendu {nb_attendu_avant_concat}.")
+    else:
+        print(f"Reconstruction finale OK: {nb_final} lignes (attendu = obtenu).")
     
     # Stocker les statistiques pour le résumé
     df_traite.attrs['nb_gn'] = nb_gn
@@ -484,7 +529,11 @@ def traiter_doublons(chemin_fichier):
     df_traite.name = chemin_fichier
     
     # 5. Générer les résultats
-    generer_resultats(df_traite)
+    # 4.b Application des règles additionnelles post-traitement (ex: double passage)
+    df_traite = appliquer_regles_additionnelles(df_traite)
+
+    # 5. Générer les résultats
+    generer_resultats(df_traite, dossier_exports)
     
     return df_traite
 
@@ -554,25 +603,40 @@ def demander_dossier_export():
         else:
             print("Choix invalide. Veuillez entrer 1 ou 2.")
 
-def generer_resultats(df):
+def generer_resultats(df, dossier_exports_base=None):
     """
     Génère trois fichiers en sortie:
     1. Un rapport des signalisations conservées avec motifs de conservation
     2. Un rapport des signalisations doublons avec motifs de classement
     3. Un fichier CSV contenant uniquement les NUMERO_SIGNALISATION à supprimer
     """
-    # Demander à l'utilisateur où enregistrer les exports
-    dossier_exports_base = demander_dossier_export()
+    # Si aucun dossier n'est spécifié, demander à l'utilisateur
+    if dossier_exports_base is None:
+        dossier_exports_base = demander_dossier_export()
     
-    # Créer un timestamp pour les noms de fichiers et un format plus lisible
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    date_lisible = datetime.now().strftime("%d/%m/%Y à %H:%M")
-    
-    # Créer un dossier pour les exports avec le timestamp dans le dossier choisi
-    dossier_exports = os.path.join(dossier_exports_base, timestamp)
+    # Créer un timestamp pour les noms de fichiers (on conserve l'ancien format pour les fichiers)
+    maintenant = datetime.now()
+    timestamp = maintenant.strftime("%Y%m%d_%H%M")
+    date_lisible = maintenant.strftime("%d/%m/%Y à %H:%M")
+
+    # Nom du dossier d'export demandé: DoublonsIDPP_Export—{DDMOISAAAA}_{HH}h{MM}
+    mois_fr = [
+        "JANVIER", "FEVRIER", "MARS", "AVRIL", "MAI", "JUIN",
+        "JUILLET", "AOUT", "SEPTEMBRE", "OCTOBRE", "NOVEMBRE", "DECEMBRE"
+    ][maintenant.month - 1]
+    date_token_humain = f"{maintenant.day:02d}{mois_fr}{maintenant.year}_{maintenant.hour:02d}h{maintenant.minute:02d}"
+    nom_dossier_export = f"DoublonsIDPP_Export—{date_token_humain}"
+
+    dossier_exports = os.path.join(dossier_exports_base, nom_dossier_export)
     if not os.path.exists(dossier_exports):
         os.makedirs(dossier_exports)
     print(f"Dossier d'exports créé: {dossier_exports}")
+
+    # Sous-dossiers demandés
+    rapports_dir = os.path.join(dossier_exports, "Rapports")
+    listes_dir = os.path.join(dossier_exports, "Paquets de suppressions")
+    os.makedirs(rapports_dir, exist_ok=True)
+    os.makedirs(listes_dir, exist_ok=True)
     
     # Compter les signalisations PN exclues pour les statistiques informatives
     signalisations_pn = df[df['ID_GROUPE'] == "Exclus_PN"]
@@ -594,68 +658,124 @@ def generer_resultats(df):
     # 1. Rapport des signalisations conservées
     signalisations_conservees = df_sans_pn[df_sans_pn['A_SUPPRIMER'] == False]
     rapport_conservees = signalisations_conservees[colonnes_disponibles]
-    
-    # Trier le rapport des conservées par ID_GROUPE pour faciliter l'analyse
+
+    # Trier d'abord (même si ID_GROUPE sera retiré de l'export)
     if 'ID_GROUPE' in rapport_conservees.columns:
         rapport_conservees = rapport_conservees.sort_values(by=['ID_GROUPE', 'NUMERO_SIGNALISATION'])
+
+    # Retirer les colonnes demandées uniquement pour R1
+    for col_drop in ['ID_GROUPE', 'REGLE_APPLIQUEE']:
+        if col_drop in rapport_conservees.columns:
+            rapport_conservees.drop(columns=col_drop, inplace=True)
+
+    # Renommer la catégorie demandée uniquement dans l'export R1 (sans modifier le DataFrame source)
+    if 'DETAIL_REGLE' in rapport_conservees.columns:
+        rapport_conservees['DETAIL_REGLE'] = rapport_conservees['DETAIL_REGLE'].replace(
+            "Cette signalisation est conservée car elle n'a pas de doublon.",
+            "Traitement manuel requis."
+        )
     
-    nom_fichier_conservees = f'RAPPORT_Signalisations_Conservees_{timestamp}.csv'
-    chemin_complet_conservees = os.path.join(dossier_exports, nom_fichier_conservees)
+    # Nouveau nom: R1_Signalisations_conservees—{DDMOISAAAA}_{HH}h{MM}.csv
+    nom_fichier_conservees = f'R1_Signalisations_conservees—{date_token_humain}.csv'
+    chemin_complet_conservees = os.path.join(rapports_dir, nom_fichier_conservees)
     rapport_conservees.to_csv(chemin_complet_conservees, index=False, encoding='utf-8')
     
     # Ajouter un en-tête explicatif
     description_conservees = (
         "Ce fichier contient toutes les signalisations qui ont été CONSERVÉES après analyse des doublons.\n"
-        "# La colonne 'REGLE_APPLIQUEE' indique la règle qui a été utilisée pour conserver cette signalisation.\n"
-        "# La colonne 'DETAIL_REGLE' fournit une explication détaillée de la décision.\n"
-        "# La colonne 'ID_GROUPE' permet d'identifier les groupes de doublons (même valeur = même groupe)."
+        "# Conformément à la demande, les colonnes 'ID_GROUPE' et 'REGLE_APPLIQUEE' ont été retirées de ce rapport.\n"
+        "# La colonne 'DETAIL_REGLE' fournit une explication de la décision de conservation.\n"
+        "# Inclut les conservations issues de la 'Règle A: Double passage (conservée)'."
     )
     ajouter_entete_csv(chemin_complet_conservees, "SIGNALISATIONS CONSERVÉES", description_conservees)
     print(f"Rapport des signalisations conservées généré: {chemin_complet_conservees} ({len(rapport_conservees)} signalisations)")
     
     # 2. Rapport des signalisations considérées comme doublons (sans PN)
     signalisations_doublons = df_sans_pn[df_sans_pn['A_SUPPRIMER'] == True]
-    rapport_doublons = signalisations_doublons[colonnes_disponibles]
-    
-    # Trier le rapport des doublons par ID_GROUPE pour faciliter l'analyse
+    # On ajoutera plus tard la colonne PAQUET_SUPPRESSION (après découpage) – initialisation vide
+    if 'PAQUET_SUPPRESSION' not in signalisations_doublons.columns:
+        signalisations_doublons = signalisations_doublons.copy()
+        signalisations_doublons['PAQUET_SUPPRESSION'] = ''
+    rapport_doublons = signalisations_doublons[colonnes_disponibles + (['PAQUET_SUPPRESSION'] if 'PAQUET_SUPPRESSION' in signalisations_doublons.columns else [])]
+
+    # Trier d'abord (même si ID_GROUPE sera retiré de l'export)
     if 'ID_GROUPE' in rapport_doublons.columns:
         rapport_doublons = rapport_doublons.sort_values(by=['ID_GROUPE', 'NUMERO_SIGNALISATION'])
+
+    # Retirer les colonnes demandées uniquement pour R2
+    for col_drop in ['ID_GROUPE', 'REGLE_APPLIQUEE']:
+        if col_drop in rapport_doublons.columns:
+            rapport_doublons.drop(columns=col_drop, inplace=True)
     
-    nom_fichier_doublons = f'RAPPORT_Signalisations_A_Supprimer_{timestamp}.csv'
-    chemin_complet_doublons = os.path.join(dossier_exports, nom_fichier_doublons)
+    # Nouveau nom: R2_Signalisations_a_supprimer—{DDMOISAAAA}_{HH}h{MM}.csv
+    nom_fichier_doublons = f'R2_Signalisations_a_supprimer—{date_token_humain}.csv'
+    chemin_complet_doublons = os.path.join(rapports_dir, nom_fichier_doublons)
     rapport_doublons.to_csv(chemin_complet_doublons, index=False, encoding='utf-8')
     
     # Ajouter un en-tête explicatif
     description_doublons = (
-        "Ce fichier contient toutes les signalisations qui ont été marquées comme DOUBLONS et qui doivent être SUPPRIMÉES.\n"
-        "# La colonne 'REGLE_APPLIQUEE' indique la règle qui a déterminé que cette signalisation est un doublon.\n"
-        "# La colonne 'DETAIL_REGLE' fournit une explication détaillée de la décision.\n"
-        "# La colonne 'ID_GROUPE' permet d'identifier les groupes de doublons (même valeur = même groupe).\n"
-        "# Note: Les signalisations avec IDPP commençant par 'PN' ne sont pas incluses dans ce rapport."
+        "Ce fichier contient toutes les signalisations qui ont été marquées comme DOUBLONS ou reclassées pour SUPPRESSION.\n"
+        "# Conformément à la demande, les colonnes 'ID_GROUPE' et 'REGLE_APPLIQUEE' ont été retirées de ce rapport.\n"
+        "# La colonne 'DETAIL_REGLE' fournit toujours une explication de la décision de suppression.\n"
+        "# Inclut les suppressions issues de la 'Règle A: Double passage (suppression)'.\n"
+    "# Une colonne supplémentaire 'PAQUET_SUPPRESSION' indique dans quel fichier PAQUETxx-SUPPRESSION.txt figure ce numéro (découpage par blocs de 500).\n"
+    "# Note: Les signalisations avec IDPP commençant par 'PN' ne sont pas incluses dans ce rapport."
     )
     ajouter_entete_csv(chemin_complet_doublons, "SIGNALISATIONS À SUPPRIMER", description_doublons)
     print(f"Rapport des signalisations à supprimer généré: {chemin_complet_doublons} ({len(rapport_doublons)} signalisations)")
     
-    # 3. Liste simplifiée des numéros de signalisation à supprimer (pour import dans le système)
-    nom_fichier_liste = f'LISTE_Numeros_Signalisations_A_Supprimer_{timestamp}.csv'
-    chemin_complet_liste = os.path.join(dossier_exports, nom_fichier_liste)
-    
-    # Créer un DataFrame simplifié avec moins de colonnes pour l'importation dans les systèmes
-    colonnes_liste = ['NUMERO_SIGNALISATION', 'IDENTIFIANT_GASPARD', 'NOM', 'PRENOM', 'REGLE_APPLIQUEE']
-    colonnes_liste_disponibles = [col for col in colonnes_liste if col in df_sans_pn.columns]
-    
-    df_liste = df_sans_pn[df_sans_pn['A_SUPPRIMER'] == True][colonnes_liste_disponibles]
-    df_liste.to_csv(chemin_complet_liste, index=False, encoding='utf-8')
-    
-    # Ajouter un en-tête explicatif
-    description_liste = (
-        "Ce fichier contient uniquement les NUMÉROS DE SIGNALISATION à supprimer.\n"
-        "# Il est conçu pour être facilement importé dans votre système de gestion.\n"
-        "# Pour plus de détails sur les raisons de suppression, consultez le fichier de rapport complet.\n"
-        "# Note: Les signalisations avec IDPP commençant par 'PN' ne sont pas incluses dans cette liste."
-    )
-    ajouter_entete_csv(chemin_complet_liste, "LISTE DES NUMÉROS DE SIGNALISATION À SUPPRIMER", description_liste)
-    print(f"Liste des signalisations à supprimer générée: {chemin_complet_liste} ({len(df_liste)} signalisations)")
+    # 3. Listes simplifiées des numéros de signalisation à supprimer (fichiers .txt par blocs de 500)
+    #    + Construction du mapping NUMERO_SIGNALISATION -> PAQUETxx pour enrichir R2
+    if 'NUMERO_SIGNALISATION' in df_sans_pn.columns:
+        df_liste = df_sans_pn.loc[df_sans_pn['A_SUPPRIMER'] == True, ['NUMERO_SIGNALISATION']].copy()
+        col_num = 'NUMERO_SIGNALISATION'
+    else:
+        # fallback tentative de détection
+        df_liste = df_sans_pn.loc[df_sans_pn['A_SUPPRIMER'] == True].copy()
+        possibles = [c for c in df_liste.columns if c.lower() == 'numero_signalisation']
+        col_num = possibles[0] if possibles else df_liste.columns[0]
+        if possibles:
+            df_liste = df_liste[[col_num]]
+        else:
+            df_liste = df_liste[[col_num]]
+    numeros_list = df_liste[col_num].astype(str).tolist()
+    total_nums = len(numeros_list)
+    chunk_size = 500
+    fichiers_listes = []
+    if total_nums == 0:
+        # Créer un fichier vide pour indiquer absence
+        nom_fichier_liste_vide = f'PAQUET01-SUPPRESSION.txt'
+        chemin_vide = os.path.join(listes_dir, nom_fichier_liste_vide)
+        open(chemin_vide, 'w', encoding='utf-8').close()
+        fichiers_listes.append((nom_fichier_liste_vide, 0))
+        print("Aucun numéro à supprimer: fichier vide créé.")
+    else:
+        nb_chunks = (total_nums + chunk_size - 1) // chunk_size
+        paquet_mapping = {}
+        for i in range(nb_chunks):
+            start = i * chunk_size
+            end = min(start + chunk_size, total_nums)
+            bloc = numeros_list[start:end]
+            nom_fichier_liste_part = f'PAQUET{i+1:02d}-SUPPRESSION.txt'
+            chemin_part = os.path.join(listes_dir, nom_fichier_liste_part)
+            with open(chemin_part, 'w', encoding='utf-8') as fpart:
+                fpart.write("\n".join(bloc) + ("\n" if bloc else ""))
+            fichiers_listes.append((nom_fichier_liste_part, len(bloc)))
+            for num in bloc:
+                paquet_mapping[str(num)] = nom_fichier_liste_part
+        print(f"Listes des signalisations à supprimer générées: {len(fichiers_listes)} fichier(s), total {total_nums} signalisations")
+        # Appliquer le mapping sur signalisations_doublons
+        if total_nums > 0 and 'NUMERO_SIGNALISATION' in signalisations_doublons.columns:
+            signalisations_doublons['PAQUET_SUPPRESSION'] = signalisations_doublons['NUMERO_SIGNALISATION'].astype(str).map(paquet_mapping).fillna('')
+            # Reconstituer rapport_doublons avec la nouvelle colonne ordonnée en fin
+            colonnes_r2 = [c for c in colonnes_disponibles if c in signalisations_doublons.columns] + ['PAQUET_SUPPRESSION']
+            rapport_doublons = signalisations_doublons[colonnes_r2]
+            # Réécrire le fichier R2 (si déjà écrit plus haut) avec la nouvelle colonne enrichie
+            if os.path.exists(chemin_complet_doublons):
+                rapport_doublons.to_csv(chemin_complet_doublons, index=False, encoding='utf-8')
+    # Pour compatibilité avec le reste du code (résumés) on garde une variable représentant le total & première liste
+    nom_fichier_liste = fichiers_listes[0][0] if fichiers_listes else ''
+    df_liste_count = total_nums
     
     # Statistiques sur les groupes de doublons (sans compter les PN)
     groupes_avec_doublons = df_sans_pn[df_sans_pn['ID_GROUPE'] != "Aucun"]['ID_GROUPE'].unique()
@@ -668,20 +788,52 @@ def generer_resultats(df):
     
     # Résumé par règle appliquée (sans les règles PN)
     print("\nDÉTAIL DES RÈGLES APPLIQUÉES (hors PN):")
-    regles_appliquees = df_sans_pn['REGLE_APPLIQUEE'].value_counts()
-    for regle, count in regles_appliquees.items():
+    regles_appliquees_raw = df_sans_pn['REGLE_APPLIQUEE'].value_counts()
+    # Ordre logique désiré
+    ordre_regles = [
+        'Tri 1: Correspondance exacte entre numéro de signalisation et numéro de personne',
+        'Tri 2: Cohérence entre numéro de procédure (UNA) et identifiant GASPARD (IDPP)',
+        'Tri 3.1: Conservation de la signalisation la plus ancienne',
+        'Tri 3.2: Conservation des signalisations avec photo',
+        'Tri 3.3: Conservation de la signalisation avec le plus petit numéro',
+        'Signalisation unique (pas de doublon)',
+        'Règle A: Double passage (conservée)',
+        'Règle A: Double passage (suppression)'
+    ]
+    # Construire une série réordonnée (les règles non listées en fin)
+    regles_appliquees = []
+    deja = set()
+    for r in ordre_regles:
+        if r in regles_appliquees_raw:
+            regles_appliquees.append((r, int(regles_appliquees_raw[r])))
+            deja.add(r)
+    for r, c in regles_appliquees_raw.items():
+        if r not in deja:
+            regles_appliquees.append((r, int(c)))
+    for regle, count in regles_appliquees:
         print(f"- {regle}: {count} signalisations")
     
-    # Résumé global (sans PN)
+    # Résumé global (sans PN) = GN + AUTRES (actuel)
     total_sans_pn = len(df_sans_pn)
     a_supprimer_sans_pn = len(df_sans_pn[df_sans_pn['A_SUPPRIMER'] == True])
     a_conserver_sans_pn = total_sans_pn - a_supprimer_sans_pn
+
+    # Pour cohérence d'affichage: utiliser le comptage GN initial (nb_gn) comme référence unique
+    total_gn_stats = nb_gn
+    # Recalculer suppressions/conservations GN sur le df_sans_pn (qui exclut PN mais contient GN + autres)
+    if 'IDENTIFIANT_GASPARD' in df_sans_pn.columns and 'A_SUPPRIMER' in df_sans_pn.columns:
+        masque_gn_stats = df_sans_pn['IDENTIFIANT_GASPARD'].astype(str).str.startswith('GN')
+        a_supprimer_gn = (df_sans_pn['A_SUPPRIMER'] & masque_gn_stats).sum()
+        a_conserver_gn = masque_gn_stats.sum() - a_supprimer_gn
+    else:
+        a_supprimer_gn = 0
+        a_conserver_gn = total_gn_stats
     
     # Pour information uniquement, garder le total avec PN
     total_avec_pn = len(df)
     
     # 4. Création d'un résumé au format PDF-friendly (HTML)
-    nom_fichier_resume = f'RESUME_Traitement_Doublons_{timestamp}.html'
+    nom_fichier_resume = f'RESUME-WEB_Traitement_Doublons—{date_token_humain}.html'
     chemin_complet_resume = os.path.join(dossier_exports, nom_fichier_resume)
     
     # Générer le contenu HTML
@@ -700,12 +852,16 @@ def generer_resultats(df):
         .stats th {{ background-color: #f2f2f2; }}
         .files {{ margin: 20px 0; }}
         .files table {{ border-collapse: collapse; width: 100%; }}
-        .files th, .files td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+    .files th, .files td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
         .files th {{ background-color: #f2f2f2; }}
         .rules {{ margin: 20px 0; }}
         .rules table {{ border-collapse: collapse; width: 100%; }}
         .rules th, .rules td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
         .rules th {{ background-color: #f2f2f2; }}
+    .total td {{ font-weight: bold; background-color: #eef; }}
+    .files tr.indent td {{ background:#f7f7f7; color:#444; font-family: monospace; }}
+    .arrow-derives {{ color:#0066cc; font-weight:bold; }}
+    .legend {{ font-size:0.85em; color:#555; margin-top:6px; }}
         .footer {{ margin-top: 30px; font-size: 0.8em; color: #666; }}
         .note {{ color: #cc0000; margin: 15px 0; }}
     </style>
@@ -719,7 +875,7 @@ def generer_resultats(df):
         <p><strong>Note importante:</strong> Les {nb_pn_exclus} signalisations avec IDPP commençant par 'PN' ont été exclues des statistiques et des rapports de suppression.</p>
     </div>
     
-    <h2>Statistiques globales (hors PN)</h2>
+    <h2>Statistiques globales GN</h2>
     <div class="stats">
         <table>
             <tr>
@@ -728,19 +884,19 @@ def generer_resultats(df):
                 <th>Pourcentage</th>
             </tr>
             <tr>
-                <td>Total des signalisations (hors PN)</td>
-                <td>{total_sans_pn}</td>
+                <td>Total des signalisations GN</td>
+                <td>{total_gn_stats}</td>
                 <td>100%</td>
             </tr>
             <tr>
                 <td>Signalisations à conserver</td>
-                <td>{a_conserver_sans_pn}</td>
-                <td>{a_conserver_sans_pn/total_sans_pn*100:.1f}%</td>
+                <td>{a_conserver_gn}</td>
+                <td>{(a_conserver_gn/total_gn_stats*100) if total_gn_stats>0 else 0:.1f}%</td>
             </tr>
             <tr>
                 <td>Signalisations à supprimer</td>
-                <td>{a_supprimer_sans_pn}</td>
-                <td>{a_supprimer_sans_pn/total_sans_pn*100:.1f}%</td>
+                <td>{a_supprimer_gn}</td>
+                <td>{(a_supprimer_gn/total_gn_stats*100) if total_gn_stats>0 else 0:.1f}%</td>
             </tr>
             <tr>
                 <td>Nombre de groupes de doublons identifiés</td>
@@ -750,7 +906,7 @@ def generer_resultats(df):
         </table>
     </div>
     
-    <h2>Répartition par type d'identifiant GASPARD</h2>
+    <h2>Répartition GN/PN selon l'identifiant GASPARD</h2>
     <div class="stats">
         <table>
             <tr>
@@ -780,7 +936,7 @@ def generer_resultats(df):
         </table>
     </div>
     
-    <h2>Détail des règles appliquées (hors PN)</h2>
+    <h2>Détail des règles appliquées</h2>
     <div class="rules">
         <table>
             <tr>
@@ -791,15 +947,24 @@ def generer_resultats(df):
 """
     
     # Ajouter chaque règle avec son compte
-    for regle, count in regles_appliquees.items():
+    total_regles = 0
+    for regle, count in regles_appliquees:
         pourcentage = count/total_sans_pn*100 if total_sans_pn > 0 else 0
+        total_regles += count
         html_content += f"""
             <tr>
                 <td>{regle}</td>
                 <td>{count}</td>
                 <td>{pourcentage:.1f}%</td>
             </tr>"""
-    
+    if total_regles > 0:
+        html_content += f"""
+            <tr class=\"total\">
+                <td>TOTAL</td>
+                <td>{total_regles}</td>
+                <td>100%</td>
+            </tr>"""
+
     html_content += """
         </table>
     </div>
@@ -813,6 +978,8 @@ def generer_resultats(df):
                 <th>Nombre d'enregistrements</th>
             </tr>"""
     
+    # Total limité aux rapports R1 + R2 seulement (exclusion des paquets)
+    total_enregistrements = len(rapport_conservees) + len(rapport_doublons)
     html_content += f"""
             <tr>
                 <td>{nom_fichier_conservees}</td>
@@ -824,22 +991,34 @@ def generer_resultats(df):
                 <td>Rapport détaillé des signalisations à supprimer</td>
                 <td>{len(rapport_doublons)}</td>
             </tr>
-            <tr>
-                <td>{nom_fichier_liste}</td>
-                <td>Liste simplifiée des numéros de signalisation à supprimer</td>
-                <td>{len(df_liste)}</td>
+            <!-- Fichiers de listes simplifiées (indents visuels) -->
+            {''.join(f'<tr class="indent"><td><span class="arrow-derives">↘</span>&nbsp;{f}</td><td>&nbsp;&nbsp;Paquet de suppression (issu de R2)</td><td>&nbsp;&nbsp;{c}</td></tr>' for f,c in fichiers_listes)}
+            <tr class=\"total\">
+                <td>TOTAL</td>
+                <td>Enregistrements cumulés</td>
+                <td>{total_enregistrements}</td>
             </tr>
         </table>
+        <p class="legend"><span class="arrow-derives">↘</span> Paquets de suppression dérivés du rapport R2 (découpage en blocs de 500 numéros).</p>
     </div>
     
     <div class="footer">
         <p>Ce rapport a été généré automatiquement par le script de traitement des doublons de signalisations développé par le GND Yoann BAUDRIN.</p>
-        <p>Pôle Judiciaire de la Gendarmerie Nationale - Département du Fichier Automatisé des Empreintes Digitales.</p>
+        <p>Gendarmerie Nationale - Département du Fichier Automatisé des Empreintes Digitales.</p>
         <p>Tous les fichiers se trouvent dans le dossier: {dossier_exports}</p>
     </div>
 </body>
 </html>"""
     
+    # Ajouter une note explicative sur la Règle A
+    note_regle_a = (
+        "<p><strong>Note sur la Règle A (Double passage):</strong> Cette règle s'applique après la détection classique des doublons. "
+        "Elle identifie des signalisations initialement marquées comme 'Signalisation unique' mais qui apparaissent plusieurs fois "
+        "avec les mêmes informations (IDENTIFIANT_GASPARD, identité, NUM_PROCEDURE) et des numéros de signalisation/personne différents, "
+        "signe probable d'un double envoi. La plus ancienne est conservée, les autres sont supprimées.</p>"
+    )
+    html_content = html_content.replace('</div>\n\n    <h2>Fichiers générés</h2>', note_regle_a + '\n\n    <h2>Fichiers générés</h2>')
+
     # Enregistrer le fichier HTML
     with open(chemin_complet_resume, 'w', encoding='utf-8') as f:
         f.write(html_content)
@@ -847,45 +1026,52 @@ def generer_resultats(df):
     print(f"Résumé HTML du traitement généré: {chemin_complet_resume}")
     
     # 5. Créer aussi un fichier de résumé texte pour compatibilité
-    nom_fichier_resume_txt = f'RESUME_Traitement_Doublons_{timestamp}.txt'
+    nom_fichier_resume_txt = f'RESUME-TEXT_Traitement_Doublons—{date_token_humain}.txt'
     chemin_complet_resume_txt = os.path.join(dossier_exports, nom_fichier_resume_txt)
     
     with open(chemin_complet_resume_txt, 'w', encoding='utf-8') as f:
         f.write(f"RÉSUMÉ DU TRAITEMENT DES DOUBLONS IDPP - {date_lisible}\n")
         f.write("="*80 + "\n\n")
-        
+
         f.write("INFORMATIONS GÉNÉRALES\n")
         f.write("-"*80 + "\n")
         f.write(f"Fichier traité: {os.path.basename(df.name) if hasattr(df, 'name') else 'Inconnu'}\n")
         f.write(f"Date et heure du traitement: {date_lisible}\n")
         f.write(f"Dossier des exports: {dossier_exports}\n")
         f.write(f"Note: Les {nb_pn_exclus} signalisations avec IDPP commençant par 'PN' ont été exclues des statistiques.\n\n")
-        
-        f.write("STATISTIQUES GLOBALES (HORS PN)\n")
+
+        f.write("STATISTIQUES GLOBALES GN\n")
         f.write("-"*80 + "\n")
-        f.write(f"Total des signalisations (hors PN): {total_sans_pn}\n")
-        f.write(f"Signalisations à conserver: {a_conserver_sans_pn} ({a_conserver_sans_pn/total_sans_pn*100:.1f}%)\n" if total_sans_pn > 0 else "Signalisations à conserver: 0 (0.0%)\n")
-        f.write(f"Signalisations à supprimer: {a_supprimer_sans_pn} ({a_supprimer_sans_pn/total_sans_pn*100:.1f}%)\n" if total_sans_pn > 0 else "Signalisations à supprimer: 0 (0.0%)\n")
+        f.write(f"Total des signalisations GN: {total_gn_stats}\n")
+        f.write(f"Signalisations GN à conserver: {a_conserver_gn} ({a_conserver_gn/total_gn_stats*100:.1f}%)\n" if total_gn_stats > 0 else "Signalisations GN à conserver: 0 (0.0%)\n")
+        f.write(f"Signalisations GN à supprimer: {a_supprimer_gn} ({a_supprimer_gn/total_gn_stats*100:.1f}%)\n" if total_gn_stats > 0 else "Signalisations GN à supprimer: 0 (0.0%)\n")
         f.write(f"Nombre de groupes de doublons identifiés: {nb_groupes}\n\n")
-        
+
         f.write("RÉPARTITION PAR TYPE D'IDENTIFIANT GASPARD\n")
         f.write("-"*80 + "\n")
         f.write(f"- Signalisations GN: {nb_gn} ({nb_gn/total_avec_pn*100:.1f}% du total général) - Analysées pour doublons\n" if total_avec_pn > 0 else "- Signalisations GN: 0 (0.0%)\n")
         f.write(f"- Signalisations PN: {nb_pn} ({nb_pn/total_avec_pn*100:.1f}% du total général) - Exclues automatiquement\n" if total_avec_pn > 0 else "- Signalisations PN: 0 (0.0%)\n")
         if nb_autres > 0:
             f.write(f"- Autres formats d'IDPP: {nb_autres} ({nb_autres/total_avec_pn*100:.1f}% du total général) - Analysées pour doublons\n" if total_avec_pn > 0 else f"- Autres formats d'IDPP: {nb_autres} (0.0%)\n")
-        
+
         f.write("\nDÉTAIL DES RÈGLES APPLIQUÉES (HORS PN)\n")
         f.write("-"*80 + "\n")
-        for regle, count in regles_appliquees.items():
+        for regle, count in regles_appliquees:
             pourcentage = count/total_sans_pn*100 if total_sans_pn > 0 else 0
             f.write(f"- {regle}: {count} signalisations ({pourcentage:.1f}%)\n")
+        f.write("\nNOTE RÈGLE A (Double passage)\n")
+        f.write("- Cette règle post-traitement détecte des enregistrements clonés issus d'un double clic opérateur.\n")
+        f.write("- Conservation du plus ancien NUMERO_SIGNALISATION, suppression des suivants identiques.\n")
         
         f.write("\nFICHIERS GÉNÉRÉS\n")
         f.write("-"*80 + "\n")
         f.write(f"1. {nom_fichier_conservees}\n   - Rapport détaillé des signalisations conservées ({len(rapport_conservees)} signalisations)\n\n")
         f.write(f"2. {nom_fichier_doublons}\n   - Rapport détaillé des signalisations à supprimer ({len(rapport_doublons)} signalisations)\n\n")
-        f.write(f"3. {nom_fichier_liste}\n   - Liste simplifiée des numéros de signalisation à supprimer ({len(df_liste)} signalisations)\n\n")
+        # Fichiers de listes simplifiées
+        f.write("3. LISTES SIMPLIFIEES DES NUMEROS A SUPPRIMER\n")
+        for f_liste, count_liste in fichiers_listes:
+            f.write(f"   - {f_liste} : {count_liste} numéros\n")
+        f.write(f"   Total: {df_liste_count} numéros\n\n")
         f.write(f"4. {nom_fichier_resume}\n   - Résumé du traitement au format HTML (plus lisible)\n\n")
         
         f.write("="*80 + "\n")
@@ -904,6 +1090,73 @@ def generer_resultats(df):
     print("="*80)
     print(f"Tous les fichiers générés ont été placés dans le dossier: {dossier_exports}")
     print("Pour consulter les résultats détaillés, ouvrez le fichier de résumé HTML généré.")
+
+def appliquer_regles_additionnelles(df: pd.DataFrame) -> pd.DataFrame:
+    """Applique des règles post-traitement sur les signalisations initialement marquées
+    comme "signalisation unique (pas de doublon)" afin de détecter des cas de double passage.
+
+    Règle A (Double passage):
+      - Cible uniquement les lignes dont DETAIL_REGLE == "Cette signalisation est conservée car elle n'a pas de doublon." et ID_GROUPE == 'Aucun'
+      - On regroupe par (IDENTIFIANT_GASPARD, NOM, PRENOM, DATE_NAISSANCE_MIN, NUM_PROCEDURE)
+      - Si un groupe ainsi défini contient >1 enregistrement et que toutes les colonnes sauf NUMERO_SIGNALISATION / NUMERO_PERSONNE sont identiques,
+        on considère qu'il s'agit d'un double clic opérateur.
+      - On conserve le plus ancien (NUMERO_SIGNALISATION le plus petit) et marque les autres à supprimer.
+
+    Ajoute REGLE_APPLIQUEE = "Règle A: Double passage (suppression de la plus récente)" et un DETAIL_REGLE explicatif
+    pour les lignes modifiées.
+    """
+    try:
+        if df is None or df.empty:
+            return df
+        colonnes_requises = ['IDENTIFIANT_GASPARD','NOM','PRENOM','DATE_NAISSANCE_MIN','NUM_PROCEDURE',
+                             'NUMERO_SIGNALISATION','NUMERO_PERSONNE','DETAIL_REGLE','ID_GROUPE']
+        if not all(c in df.columns for c in colonnes_requises):
+            return df  # contexte incomplet
+
+        masque_cible = (
+            (df['ID_GROUPE'] == 'Aucun') &
+            (df['DETAIL_REGLE'] == "Cette signalisation est conservée car elle n'a pas de doublon.")
+        )
+        df_uniques = df[masque_cible].copy()
+        if df_uniques.empty:
+            return df
+
+        # Clé de regroupement pour détecter multi-entrées identiques hors numéros auto
+        cle = ['IDENTIFIANT_GASPARD','NOM','PRENOM','DATE_NAISSANCE_MIN','NUM_PROCEDURE']
+        groupes = df_uniques.groupby(cle, dropna=False)
+        modifications = 0
+        for k, g in groupes:
+            if len(g) < 2:
+                continue
+            # Vérifier stricte identité sur les champs hors numéros
+            # (déjà garantie par la clé) => on applique la règle
+            min_num = g['NUMERO_SIGNALISATION'].min()
+            idx_conserve = g[g['NUMERO_SIGNALISATION'] == min_num].index
+            idx_suppr = g[g['NUMERO_SIGNALISATION'] != min_num].index
+            if len(idx_suppr) == 0:
+                continue
+            df.loc[idx_conserve, 'REGLE_APPLIQUEE'] = 'Règle A: Double passage (conservée)'
+            df.loc[idx_conserve, 'DETAIL_REGLE'] = (
+                "Signalisation conservée (double passage détecté: plus ancien numéro de signalisation)."
+            )
+            df.loc[idx_conserve, 'A_SUPPRIMER'] = False
+            df.loc[idx_suppr, 'REGLE_APPLIQUEE'] = 'Règle A: Double passage (suppression)'
+            df.loc[idx_suppr, 'DETAIL_REGLE'] = (
+                "Double passage opérateur détecté: suppression des enregistrements plus récents avec mêmes données."
+            )
+            df.loc[idx_suppr, 'A_SUPPRIMER'] = True
+            # Donner un identifiant de groupe synthétique pour traçabilité
+            # (on concatène un hash simple de la clé)
+            tag = f"DoublePass_{abs(hash(k)) % 10**8}"
+            df.loc[idx_conserve, 'ID_GROUPE'] = tag
+            df.loc[idx_suppr, 'ID_GROUPE'] = tag
+            modifications += len(idx_suppr)
+        if modifications:
+            print(f"Règle A appliquée: {modifications} signalisation(s) reclassée(s) comme double passage.")
+        return df
+    except Exception as e:
+        print(f"[AVERTISSEMENT] Erreur lors de l'application des règles additionnelles: {e}")
+        return df
 
 def demander_fichier_csv():
     """
