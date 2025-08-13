@@ -1,11 +1,12 @@
 [Desktop Entry]
-Version=1.0
 Type=Application
-Name=DoublonsIDPP
-Comment=Interface graphique pour le traitement des doublons de signalisations
+Version=1.5
+Name=Doublons IDPP
+GenericName=Détection de doublons IDPP
+Comment=Interface graphique pour le traitement des doublons de signalisations GASPARD
 Comment[en]=GUI for duplicate reports processing
 Exec=/home/runner/work/DoublonsIDPP/DoublonsIDPP/run_gui.sh
-Icon=application-x-executable
+Icon=/icons/icon-256.png
 Terminal=false
 Categories=Office;Development;
 StartupNotify=true

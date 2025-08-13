@@ -667,6 +667,13 @@ def generer_resultats(df, dossier_exports_base=None):
     for col_drop in ['ID_GROUPE', 'REGLE_APPLIQUEE']:
         if col_drop in rapport_conservees.columns:
             rapport_conservees.drop(columns=col_drop, inplace=True)
+
+    # Renommer la catégorie demandée uniquement dans l'export R1 (sans modifier le DataFrame source)
+    if 'DETAIL_REGLE' in rapport_conservees.columns:
+        rapport_conservees['DETAIL_REGLE'] = rapport_conservees['DETAIL_REGLE'].replace(
+            "Cette signalisation est conservée car elle n'a pas de doublon.",
+            "Traitement manuel requis."
+        )
     
     # Nouveau nom: R1_Signalisations_conservees—{DDMOISAAAA}_{HH}h{MM}.csv
     nom_fichier_conservees = f'R1_Signalisations_conservees—{date_token_humain}.csv'
