@@ -16,10 +16,10 @@ from datetime import datetime
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QPushButton, QFileDialog, 
                              QTextEdit, QProgressBar, QMessageBox, QGroupBox,
-                             QLineEdit, QFrame, QSpacerItem, QSizePolicy, QAction,
+                             QLineEdit, QFrame, QSpacerItem, QSizePolicy,
                              QScrollArea)
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, QSettings, QPointF, QRectF
-from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QPixmap, QPainter, QPen, QBrush, QPainterPath
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, QSettings
+from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QPixmap
 import math
 from PyQt5.QtWidgets import QGraphicsDropShadowEffect
 
@@ -88,23 +88,7 @@ class DoublonsIDPPGUI(QMainWindow):
         self.setWindowIcon(QIcon.fromTheme("view-filter"))
         self.statusBar().showMessage("Prêt")
 
-        # Action raccourci thème
-        theme_action = QAction("Basculer thème (système/clair/sombre)", self)
-        theme_action.setShortcut("Ctrl+T")
-        theme_action.triggered.connect(self.toggle_theme)
-        self.addAction(theme_action)
-
-        # Bouton toggle thème
-        self.btn_toggle_theme = QPushButton()
-        self.btn_toggle_theme.setToolTip("Basculer thème clair / sombre (Ctrl+T)")
-        self.btn_toggle_theme.setFixedSize(40, 40)
-        self.btn_toggle_theme.clicked.connect(self.toggle_theme)
-        self.btn_toggle_theme.setCursor(Qt.PointingHandCursor)
-        self.btn_toggle_theme.setStyleSheet(
-            "QPushButton { border: none; background: transparent; }"
-            "QPushButton:hover { background: rgba(255,255,255,0.08); border-radius:20px; }"
-        )
-        self.update_theme_icon()
+    # Plus de bouton de bascule de thème: l'application suit le thème système
 
         # Structure centrale avec scroll
         central_widget = QWidget(); self.setCentralWidget(central_widget)
@@ -126,7 +110,7 @@ class DoublonsIDPPGUI(QMainWindow):
         title_box.addWidget(title_label); title_box.addWidget(subtitle_label)
         header_layout.addLayout(title_box)
         header_layout.addItem(QSpacerItem(40,20,QSizePolicy.Expanding,QSizePolicy.Minimum))
-        header_layout.addWidget(self.btn_toggle_theme)
+    # En-tête sans bouton bascule de thème
         main_layout.addWidget(header)
 
         # Groupe CSV
@@ -264,36 +248,51 @@ class DoublonsIDPPGUI(QMainWindow):
     
     def apply_card_effects(self, widgets):
         """Ajoute une ombre portée légère aux cadres."""
+        # Choisir la couleur d'ombre selon le thème effectif (prend en compte le mode système)
+        effective_theme = self.get_effective_theme()
         for w in widgets:
             effect = QGraphicsDropShadowEffect(self)
             effect.setBlurRadius(20)
             effect.setXOffset(0)
             effect.setYOffset(4)
             # Couleur adaptée selon thème
-            if self.current_theme == "dark":
+            if effective_theme == "dark":
                 effect.setColor(QColor(0, 0, 0, 160))
             else:
                 effect.setColor(QColor(0, 0, 0, 50))
             w.setGraphicsEffect(effect)
     
-    def toggle_theme(self):
-        # cycle: system -> light -> dark -> system
-        if self.current_theme == "system":
-            self.current_theme = "light"
-        elif self.current_theme == "light":
-            self.current_theme = "dark"
-        else:
-            self.current_theme = "system"
-        self.apply_theme(self.current_theme)
-        self.apply_card_effects([
-            *self.findChildren(QGroupBox)
-        ])
-        self.update_theme_icon()
-        self.statusBar().showMessage(f"Thème {self.current_theme}", 3000)
-        self.save_settings()
+    # La bascule de thème a été retirée: on respecte le thème système uniquement
     
     def apply_theme(self, theme):
         """Applique un thème système (par défaut) ou clair/sombre moderne."""
+        # Utilitaire: ajustement de couleur hex pour hover/pressed
+        def _adjust_hex_color(hex_color: str, factor: float) -> str:
+            """Assombrit (<1) ou éclaircit (>1) une couleur hex (#RRGGBB)."""
+            try:
+                hex_color = hex_color.lstrip('#')
+                r = int(hex_color[0:2], 16)
+                g = int(hex_color[2:4], 16)
+                b = int(hex_color[4:6], 16)
+                def clamp(v):
+                    return max(0, min(255, int(v)))
+                if factor >= 1:
+                    # éclaircir vers 255
+                    r = clamp(r + (255 - r) * (factor - 1))
+                    g = clamp(g + (255 - g) * (factor - 1))
+                    b = clamp(b + (255 - b) * (factor - 1))
+                else:
+                    # assombrir
+                    r = clamp(r * factor)
+                    g = clamp(g * factor)
+                    b = clamp(b * factor)
+                return f"#{r:02x}{g:02x}{b:02x}"
+            except Exception:
+                return hex_color if hex_color.startswith('#') else f"#{hex_color}"
+
+        # Détection du thème effectif pour certains comportements
+        effective_theme = self.get_effective_theme()
+
         if theme == "system":
             # Respect du thème de l'OS: retirer les stylesheets custom
             self.setStyleSheet("")
@@ -306,6 +305,8 @@ class DoublonsIDPPGUI(QMainWindow):
                     self.progress_bar.setStyleSheet("")
             except Exception:
                 pass
+            # Mettre à jour les ombres selon le thème effectif du système
+            self.apply_card_effects([*self.findChildren(QGroupBox)])
             return
         accent = "#1d72b8"
         danger = "#dc3545"
@@ -325,6 +326,10 @@ class DoublonsIDPPGUI(QMainWindow):
             text = "#1f2d3d"
             secondary = "#5f6b76"
             header_grad = "linear-gradient(90deg, #1d72b8, #2396ef)"
+
+        # Remplacer les fonctions non supportées par Qt (shade) par des couleurs calculées
+        hover = _adjust_hex_color(accent, 1.08)  # légèrement plus clair
+        pressed = _adjust_hex_color(accent, 0.85)  # légèrement plus sombre
         stylesheet = f"""
         QMainWindow {{ background: {bg}; }}
         #HeaderFrame {{
@@ -369,8 +374,8 @@ class DoublonsIDPPGUI(QMainWindow):
             background: {accent};
             color: #ffffff;
         }}
-        QPushButton:hover:!disabled {{ background: shade({accent}, 110); }}
-        QPushButton:pressed {{ background: shade({accent}, 130); }}
+    QPushButton:hover:!disabled {{ background: {hover}; }}
+    QPushButton:pressed {{ background: {pressed}; }}
         QPushButton:disabled {{ background: {border}; color: {secondary}; }}
         QProgressBar {{
             background: {surface};
@@ -398,56 +403,31 @@ class DoublonsIDPPGUI(QMainWindow):
             self.csv_info_label.setStyleSheet(f"color: {success}; font-style:italic;")
         if "rapports" in self.export_info_label.text().lower():
             self.export_info_label.setStyleSheet(f"color: {success}; font-style:italic;")
+        # Ajuster ombres
+        self.apply_card_effects([*self.findChildren(QGroupBox)])
+    # Icône de bascule supprimée
 
-    def build_theme_icon(self, theme: str) -> QIcon:
-        """Construit un QIcon (soleil ou lune) en vectoriel simple selon le thème cible."""
-        size = 64
-        pm = QPixmap(size, size)
-        pm.fill(Qt.transparent)
-        painter = QPainter(pm)
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        if theme == "dark":
-            # Afficher une lune (croissant clair) pour indiquer qu'on peut aller vers le thème clair
-            outer_rect = QRectF(size*0.18, size*0.14, size*0.56, size*0.56)
-            inner_rect = QRectF(size*0.34, size*0.14, size*0.56, size*0.56)
-            path_outer = QPainterPath(); path_outer.addEllipse(outer_rect)
-            path_inner = QPainterPath(); path_inner.addEllipse(inner_rect)
-            crescent = path_outer.subtracted(path_inner)
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(255,255,255))
-            painter.drawPath(crescent)
-        else:
-            # Soleil (indique possibilité basculer sombre)
-            center = QPointF(size/2, size/2)
-            radius = size * 0.22
-            core_color = QColor(255, 191, 0)
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(core_color)
-            painter.drawEllipse(QRectF(center.x()-radius, center.y()-radius, radius*2, radius*2))
-            # Rayons
-            painter.setPen(QPen(core_color, size*0.05, Qt.SolidLine, Qt.RoundCap))
-            for i in range(12):
-                angle = 2 * math.pi * i / 12
-                r1 = radius + size*0.06
-                r2 = radius + size*0.18
-                p1 = QPointF(center.x() + r1*math.cos(angle), center.y() + r1*math.sin(angle))
-                p2 = QPointF(center.x() + r2*math.cos(angle), center.y() + r2*math.sin(angle))
-                painter.drawLine(p1, p2)
-
-        painter.end()
-        return QIcon(pm)
-
-    def update_theme_icon(self):
-        self.btn_toggle_theme.setIcon(self.build_theme_icon(self.current_theme))
-        self.btn_toggle_theme.setIconSize(self.btn_toggle_theme.size()*0.6)
+    def get_effective_theme(self) -> str:
+        """Retourne 'dark' ou 'light' en fonction du choix utilisateur et du système."""
+        if self.current_theme in ("dark", "light"):
+            return self.current_theme
+        # Détecter le thème système via la palette Qt (Linux/Ubuntu inclus)
+        try:
+            pal = QApplication.instance().palette()
+            # Utiliser la couleur de fenêtre comme référence
+            color = pal.color(QPalette.Window)
+            # Luminance perceptuelle
+            luminance = (0.2126 * color.redF() + 0.7152 * color.greenF() + 0.0722 * color.blueF())
+            return "dark" if luminance < 0.5 else "light"
+        except Exception:
+            return "light"
     
     def load_settings(self):
         """Charge les préférences utilisateur (chemins & thème)."""
         last_csv = self.settings.value("last_csv", "")
         last_export = self.settings.value("last_export", "")
-        theme = self.settings.value("theme", "system")
-        self.current_theme = theme
+        # Thème: toujours système
+        self.current_theme = "system"
         if last_csv and os.path.exists(last_csv):
             self.chemin_fichier_csv = last_csv
             self.csv_path_edit.setText(last_csv)
@@ -459,7 +439,7 @@ class DoublonsIDPPGUI(QMainWindow):
     def save_settings(self):
         self.settings.setValue("last_csv", self.chemin_fichier_csv)
         self.settings.setValue("last_export", self.dossier_exports)
-        self.settings.setValue("theme", self.current_theme)
+    # Plus de thème à enregistrer
         
     def log_message(self, message):
         """Ajoute un message au journal d'activité"""
