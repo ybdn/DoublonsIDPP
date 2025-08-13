@@ -72,9 +72,9 @@ class DoublonsIDPPGUI(QMainWindow):
         self.chemin_fichier_csv = ""
         self.dossier_exports = ""
         self.traitement_thread = None
-        self.current_theme = "light"  # light | dark
+        self.current_theme = "system"  # system | light | dark
         self.settings = QSettings("PJGN", "DoublonsIDPP")
-        
+
         self.init_ui()
         self.load_settings()
         self.apply_theme(self.current_theme)
@@ -89,7 +89,7 @@ class DoublonsIDPPGUI(QMainWindow):
         self.statusBar().showMessage("Prêt")
 
         # Action raccourci thème
-        theme_action = QAction("Basculer thème clair/sombre", self)
+        theme_action = QAction("Basculer thème (système/clair/sombre)", self)
         theme_action.setShortcut("Ctrl+T")
         theme_action.triggered.connect(self.toggle_theme)
         self.addAction(theme_action)
@@ -277,7 +277,13 @@ class DoublonsIDPPGUI(QMainWindow):
             w.setGraphicsEffect(effect)
     
     def toggle_theme(self):
-        self.current_theme = "dark" if self.current_theme == "light" else "light"
+        # cycle: system -> light -> dark -> system
+        if self.current_theme == "system":
+            self.current_theme = "light"
+        elif self.current_theme == "light":
+            self.current_theme = "dark"
+        else:
+            self.current_theme = "system"
         self.apply_theme(self.current_theme)
         self.apply_card_effects([
             *self.findChildren(QGroupBox)
@@ -287,7 +293,20 @@ class DoublonsIDPPGUI(QMainWindow):
         self.save_settings()
     
     def apply_theme(self, theme):
-        """Applique un thème clair ou sombre moderne."""
+        """Applique un thème système (par défaut) ou clair/sombre moderne."""
+        if theme == "system":
+            # Respect du thème de l'OS: retirer les stylesheets custom
+            self.setStyleSheet("")
+            try:
+                self.btn_select_csv.setStyleSheet("")
+                self.btn_select_export.setStyleSheet("")
+                self.btn_process.setStyleSheet("")
+                self.log_text.setStyleSheet("")
+                if hasattr(self, "progress_bar") and self.progress_bar:
+                    self.progress_bar.setStyleSheet("")
+            except Exception:
+                pass
+            return
         accent = "#1d72b8"
         danger = "#dc3545"
         success = "#2e8540"
@@ -427,7 +446,7 @@ class DoublonsIDPPGUI(QMainWindow):
         """Charge les préférences utilisateur (chemins & thème)."""
         last_csv = self.settings.value("last_csv", "")
         last_export = self.settings.value("last_export", "")
-        theme = self.settings.value("theme", "light")
+        theme = self.settings.value("theme", "system")
         self.current_theme = theme
         if last_csv and os.path.exists(last_csv):
             self.chemin_fichier_csv = last_csv
@@ -635,32 +654,7 @@ def main():
     app.setApplicationVersion("1.0")
     app.setOrganizationName("PJGN/FAED")
     
-    # Définir le style global
-    app.setStyleSheet("""
-        QMainWindow {
-            background-color: #ffffff;
-        }
-        QGroupBox {
-            margin-top: 10px;
-            padding-top: 10px;
-            border: 2px solid #cccccc;
-            border-radius: 5px;
-        }
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            left: 10px;
-            padding: 0 5px 0 5px;
-        }
-        QLineEdit {
-            padding: 8px;
-            border: 2px solid #dee2e6;
-            border-radius: 4px;
-            font-size: 12px;
-        }
-        QLineEdit:focus {
-            border-color: #0066cc;
-        }
-    """)
+    # Ne pas imposer de style global pour respecter le thème système
     
     try:
         # Créer et afficher la fenêtre principale
