@@ -572,15 +572,29 @@ def generer_resultats(df, dossier_exports_base=None):
     if dossier_exports_base is None:
         dossier_exports_base = demander_dossier_export()
     
-    # Créer un timestamp pour les noms de fichiers et un format plus lisible
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    date_lisible = datetime.now().strftime("%d/%m/%Y à %H:%M")
-    
-    # Créer un dossier pour les exports avec le timestamp dans le dossier choisi
-    dossier_exports = os.path.join(dossier_exports_base, timestamp)
+    # Créer un timestamp pour les noms de fichiers (on conserve l'ancien format pour les fichiers)
+    maintenant = datetime.now()
+    timestamp = maintenant.strftime("%Y%m%d_%H%M")
+    date_lisible = maintenant.strftime("%d/%m/%Y à %H:%M")
+
+    # Nom du dossier d'export demandé: DoublonsIDPP_Export—{DDMOISAAAA}_{HH}h{MM}
+    mois_fr = [
+        "JANVIER", "FEVRIER", "MARS", "AVRIL", "MAI", "JUIN",
+        "JUILLET", "AOUT", "SEPTEMBRE", "OCTOBRE", "NOVEMBRE", "DECEMBRE"
+    ][maintenant.month - 1]
+    date_token_humain = f"{maintenant.day:02d}{mois_fr}{maintenant.year}_{maintenant.hour:02d}h{maintenant.minute:02d}"
+    nom_dossier_export = f"DoublonsIDPP_Export—{date_token_humain}"
+
+    dossier_exports = os.path.join(dossier_exports_base, nom_dossier_export)
     if not os.path.exists(dossier_exports):
         os.makedirs(dossier_exports)
     print(f"Dossier d'exports créé: {dossier_exports}")
+
+    # Sous-dossiers demandés
+    rapports_dir = os.path.join(dossier_exports, "Rapports")
+    listes_dir = os.path.join(dossier_exports, "Listes de suppressions")
+    os.makedirs(rapports_dir, exist_ok=True)
+    os.makedirs(listes_dir, exist_ok=True)
     
     # Compter les signalisations PN exclues pour les statistiques informatives
     signalisations_pn = df[df['ID_GROUPE'] == "Exclus_PN"]
@@ -607,8 +621,9 @@ def generer_resultats(df, dossier_exports_base=None):
     if 'ID_GROUPE' in rapport_conservees.columns:
         rapport_conservees = rapport_conservees.sort_values(by=['ID_GROUPE', 'NUMERO_SIGNALISATION'])
     
-    nom_fichier_conservees = f'RAPPORT_Signalisations_Conservees_{timestamp}.csv'
-    chemin_complet_conservees = os.path.join(dossier_exports, nom_fichier_conservees)
+    # Nouveau nom: R1_Signalisations_conservees—{DDMOISAAAA}_{HH}h{MM}.csv
+    nom_fichier_conservees = f'R1_Signalisations_conservees—{date_token_humain}.csv'
+    chemin_complet_conservees = os.path.join(rapports_dir, nom_fichier_conservees)
     rapport_conservees.to_csv(chemin_complet_conservees, index=False, encoding='utf-8')
     
     # Ajouter un en-tête explicatif
@@ -629,8 +644,9 @@ def generer_resultats(df, dossier_exports_base=None):
     if 'ID_GROUPE' in rapport_doublons.columns:
         rapport_doublons = rapport_doublons.sort_values(by=['ID_GROUPE', 'NUMERO_SIGNALISATION'])
     
-    nom_fichier_doublons = f'RAPPORT_Signalisations_A_Supprimer_{timestamp}.csv'
-    chemin_complet_doublons = os.path.join(dossier_exports, nom_fichier_doublons)
+    # Nouveau nom: R2_Signalisations_a_supprimer—{DDMOISAAAA}_{HH}h{MM}.csv
+    nom_fichier_doublons = f'R2_Signalisations_a_supprimer—{date_token_humain}.csv'
+    chemin_complet_doublons = os.path.join(rapports_dir, nom_fichier_doublons)
     rapport_doublons.to_csv(chemin_complet_doublons, index=False, encoding='utf-8')
     
     # Ajouter un en-tête explicatif
@@ -645,8 +661,8 @@ def generer_resultats(df, dossier_exports_base=None):
     print(f"Rapport des signalisations à supprimer généré: {chemin_complet_doublons} ({len(rapport_doublons)} signalisations)")
     
     # 3. Liste simplifiée des numéros de signalisation à supprimer (pour import dans le système)
-    nom_fichier_liste = f'LISTE_Numeros_Signalisations_A_Supprimer_{timestamp}.csv'
-    chemin_complet_liste = os.path.join(dossier_exports, nom_fichier_liste)
+    nom_fichier_liste = f'LISTE_Numeros_Signalisations_A_Supprimer—{date_token_humain}.csv'
+    chemin_complet_liste = os.path.join(listes_dir, nom_fichier_liste)
     
     # Créer un DataFrame simplifié avec moins de colonnes pour l'importation dans les systèmes
     colonnes_liste = ['NUMERO_SIGNALISATION', 'IDENTIFIANT_GASPARD', 'NOM', 'PRENOM', 'REGLE_APPLIQUEE']
@@ -689,7 +705,7 @@ def generer_resultats(df, dossier_exports_base=None):
     total_avec_pn = len(df)
     
     # 4. Création d'un résumé au format PDF-friendly (HTML)
-    nom_fichier_resume = f'RESUME_Traitement_Doublons_{timestamp}.html'
+    nom_fichier_resume = f'RESUME-WEB_Traitement_Doublons—{date_token_humain}.html'
     chemin_complet_resume = os.path.join(dossier_exports, nom_fichier_resume)
     
     # Générer le contenu HTML
@@ -855,7 +871,7 @@ def generer_resultats(df, dossier_exports_base=None):
     print(f"Résumé HTML du traitement généré: {chemin_complet_resume}")
     
     # 5. Créer aussi un fichier de résumé texte pour compatibilité
-    nom_fichier_resume_txt = f'RESUME_Traitement_Doublons_{timestamp}.txt'
+    nom_fichier_resume_txt = f'RESUME-TEXT_Traitement_Doublons—{date_token_humain}.txt'
     chemin_complet_resume_txt = os.path.join(dossier_exports, nom_fichier_resume_txt)
     
     with open(chemin_complet_resume_txt, 'w', encoding='utf-8') as f:

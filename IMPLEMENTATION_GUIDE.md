@@ -7,6 +7,7 @@ Cette implémentation ajoute une interface graphique PyQt5 moderne au logiciel D
 ## Fichiers ajoutés/modifiés
 
 ### Nouveaux fichiers
+
 - `gui_doublons_idpp.py` : Interface graphique principale PyQt5
 - `requirements.txt` : Dépendances Python nécessaires
 - `run_gui.sh` : Script de lancement automatique
@@ -14,6 +15,7 @@ Cette implémentation ajoute une interface graphique PyQt5 moderne au logiciel D
 - `.gitignore` : Exclusions Git appropriées
 
 ### Fichiers modifiés
+
 - `script_doublons_idpp.py` : Modifications mineures pour permettre l'import
 - `README.md` : Documentation complète pour GUI et Ubuntu
 

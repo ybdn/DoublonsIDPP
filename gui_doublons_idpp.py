@@ -16,9 +16,12 @@ from datetime import datetime
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QPushButton, QFileDialog, 
                              QTextEdit, QProgressBar, QMessageBox, QGroupBox,
-                             QLineEdit, QFrame)
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
-from PyQt5.QtGui import QFont, QIcon, QPalette, QColor
+                             QLineEdit, QFrame, QSpacerItem, QSizePolicy, QAction,
+                             QScrollArea)
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, QSettings, QPointF, QRectF
+from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QPixmap, QPainter, QPen, QBrush, QPainterPath
+import math
+from PyQt5.QtWidgets import QGraphicsDropShadowEffect
 
 # Importer le module de traitement existant
 try:
@@ -69,197 +72,341 @@ class DoublonsIDPPGUI(QMainWindow):
         self.chemin_fichier_csv = ""
         self.dossier_exports = ""
         self.traitement_thread = None
+        self.current_theme = "light"  # light | dark
+        self.settings = QSettings("PJGN", "DoublonsIDPP")
         
         self.init_ui()
+        self.load_settings()
+        self.apply_theme(self.current_theme)
         
     def init_ui(self):
         """Initialise l'interface utilisateur"""
-        self.setWindowTitle("DoublonsIDPP - Traitement des Doublons de Signalisations")
-        self.setGeometry(100, 100, 800, 600)
-        
-        # Widget central
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        
-        # Layout principal
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setSpacing(20)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        
-        # Titre
-        title_label = QLabel("DoublonsIDPP - Traitement des Doublons")
-        title_font = QFont()
-        title_font.setPointSize(16)
-        title_font.setBold(True)
-        title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignCenter)
-        title_label.setStyleSheet("color: #003366; margin-bottom: 10px;")
-        main_layout.addWidget(title_label)
-        
-        # Sous-titre
-        subtitle_label = QLabel("Interface graphique pour l'analyse et le traitement des doublons de signalisations")
-        subtitle_label.setAlignment(Qt.AlignCenter)
-        subtitle_label.setStyleSheet("color: #666666; margin-bottom: 20px;")
-        main_layout.addWidget(subtitle_label)
-        
-        # Ligne de séparation
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
-        main_layout.addWidget(line)
-        
-        # Section 1: Sélection du fichier CSV
+        # Fenêtre
+        self.setWindowTitle("DoublonsIDPP • Détection de doublons")
+        self.setGeometry(100, 100, 960, 680)
+        self.setMinimumSize(840, 620)
+        self.setWindowIcon(QIcon.fromTheme("view-filter"))
+        self.statusBar().showMessage("Prêt")
+
+        # Action raccourci thème
+        theme_action = QAction("Basculer thème clair/sombre", self)
+        theme_action.setShortcut("Ctrl+T")
+        theme_action.triggered.connect(self.toggle_theme)
+        self.addAction(theme_action)
+
+        # Bouton toggle thème
+        self.btn_toggle_theme = QPushButton()
+        self.btn_toggle_theme.setToolTip("Basculer thème clair / sombre (Ctrl+T)")
+        self.btn_toggle_theme.setFixedSize(40, 40)
+        self.btn_toggle_theme.clicked.connect(self.toggle_theme)
+        self.btn_toggle_theme.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_theme.setStyleSheet(
+            "QPushButton { border: none; background: transparent; }"
+            "QPushButton:hover { background: rgba(255,255,255,0.08); border-radius:20px; }"
+        )
+        self.update_theme_icon()
+
+        # Structure centrale avec scroll
+        central_widget = QWidget(); self.setCentralWidget(central_widget)
+        root_layout = QVBoxLayout(central_widget); root_layout.setContentsMargins(0,0,0,0); root_layout.setSpacing(0)
+        self.scroll_area = QScrollArea(); self.scroll_area.setWidgetResizable(True); self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        root_layout.addWidget(self.scroll_area)
+        self.scroll_content = QWidget(); self.scroll_area.setWidget(self.scroll_content)
+        main_layout = QVBoxLayout(self.scroll_content); main_layout.setSpacing(28); main_layout.setContentsMargins(32,28,32,28)
+        self.main_layout = main_layout
+
+        # Header
+        header = QFrame(); header.setObjectName("HeaderFrame")
+        header_layout = QHBoxLayout(header); header_layout.setContentsMargins(20,14,20,14); header_layout.setSpacing(16)
+        title_box = QVBoxLayout()
+        title_label = QLabel("DoublonsIDPP")
+        title_font = QFont(); title_font.setPointSize(20); title_font.setBold(True)
+        title_label.setFont(title_font); title_label.setObjectName("AppTitle")
+        subtitle_label = QLabel("Analyse et traitement moderne des doublons de signalisations"); subtitle_label.setObjectName("AppSubtitle")
+        title_box.addWidget(title_label); title_box.addWidget(subtitle_label)
+        header_layout.addLayout(title_box)
+        header_layout.addItem(QSpacerItem(40,20,QSizePolicy.Expanding,QSizePolicy.Minimum))
+        header_layout.addWidget(self.btn_toggle_theme)
+        main_layout.addWidget(header)
+
+        # Groupe CSV
         csv_group = QGroupBox("1. Sélection du fichier CSV à traiter")
-        csv_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        csv_layout = QVBoxLayout(csv_group)
-        
+        csv_layout = QVBoxLayout(csv_group); csv_layout.setSpacing(12); csv_layout.setContentsMargins(18,16,18,16)
         csv_selection_layout = QHBoxLayout()
-        self.csv_path_edit = QLineEdit()
-        self.csv_path_edit.setPlaceholderText("Aucun fichier sélectionné...")
-        self.csv_path_edit.setReadOnly(True)
+        self.csv_path_edit = QLineEdit(); self.csv_path_edit.setPlaceholderText("Aucun fichier sélectionné..."); self.csv_path_edit.setReadOnly(True)
         csv_selection_layout.addWidget(self.csv_path_edit)
-        
         self.btn_select_csv = QPushButton("Parcourir...")
         self.btn_select_csv.clicked.connect(self.select_csv_file)
-        self.btn_select_csv.setStyleSheet("""
-            QPushButton {
-                background-color: #0066cc;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #0052a3;
-            }
-        """)
+        self.btn_select_csv.setStyleSheet("""QPushButton { background-color:#0066cc; color:#fff; border:none; padding:8px 16px; border-radius:4px; font-weight:bold; } QPushButton:hover { background-color:#0052a3; }""")
         csv_selection_layout.addWidget(self.btn_select_csv)
-        
         csv_layout.addLayout(csv_selection_layout)
-        
-        # Informations sur le fichier CSV
-        self.csv_info_label = QLabel("Sélectionnez un fichier CSV contenant les signalisations à analyser.")
-        self.csv_info_label.setStyleSheet("color: #666666; font-style: italic;")
+        self.csv_info_label = QLabel("Sélectionnez un fichier CSV contenant les signalisations à analyser."); self.csv_info_label.setObjectName("InfoLabel")
         csv_layout.addWidget(self.csv_info_label)
-        
         main_layout.addWidget(csv_group)
-        
-        # Section 2: Destination des exports
+
+        # Groupe export
         export_group = QGroupBox("2. Destination des fichiers d'export")
-        export_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        export_layout = QVBoxLayout(export_group)
-        
+        export_layout = QVBoxLayout(export_group); export_layout.setSpacing(12); export_layout.setContentsMargins(18,16,18,16)
         export_selection_layout = QHBoxLayout()
-        self.export_path_edit = QLineEdit()
-        self.export_path_edit.setPlaceholderText("Aucun dossier sélectionné...")
-        self.export_path_edit.setReadOnly(True)
+        self.export_path_edit = QLineEdit(); self.export_path_edit.setPlaceholderText("Aucun dossier sélectionné..."); self.export_path_edit.setReadOnly(True)
         export_selection_layout.addWidget(self.export_path_edit)
-        
         self.btn_select_export = QPushButton("Parcourir...")
         self.btn_select_export.clicked.connect(self.select_export_directory)
-        self.btn_select_export.setStyleSheet("""
-            QPushButton {
-                background-color: #0066cc;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #0052a3;
-            }
-        """)
+        self.btn_select_export.setStyleSheet("""QPushButton { background-color:#0066cc; color:#fff; border:none; padding:8px 16px; border-radius:4px; font-weight:bold; } QPushButton:hover { background-color:#0052a3; }""")
         export_selection_layout.addWidget(self.btn_select_export)
-        
         export_layout.addLayout(export_selection_layout)
-        
-        # Informations sur l'export
-        self.export_info_label = QLabel("Choisissez le dossier où seront enregistrés les rapports d'analyse.")
-        self.export_info_label.setStyleSheet("color: #666666; font-style: italic;")
+        self.export_info_label = QLabel("Choisissez le dossier où seront enregistrés les rapports d'analyse."); self.export_info_label.setObjectName("InfoLabel")
         export_layout.addWidget(self.export_info_label)
-        
         main_layout.addWidget(export_group)
-        
-        # Section 3: Lancement du traitement
+
+        # Groupe traitement
         process_group = QGroupBox("3. Lancement du traitement")
-        process_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        process_layout = QVBoxLayout(process_group)
-        
-        # Bouton de traitement
+        process_layout = QVBoxLayout(process_group); process_layout.setSpacing(14); process_layout.setContentsMargins(18,18,18,18)
         self.btn_process = QPushButton("Lancer l'analyse des doublons")
         self.btn_process.clicked.connect(self.start_processing)
-        self.btn_process.setEnabled(False)
-        self.btn_process.setMinimumHeight(40)
-        self.btn_process.setStyleSheet("""
-            QPushButton {
-                background-color: #28a745;
-                color: white;
-                border: none;
-                padding: 12px 24px;
-                border-radius: 6px;
-                font-weight: bold;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #1e7e34;
-            }
-            QPushButton:disabled {
-                background-color: #cccccc;
-                color: #666666;
-            }
-        """)
+        self.btn_process.setEnabled(False); self.btn_process.setMinimumHeight(40)
+        self.btn_process.setStyleSheet("""QPushButton { background-color:#28a745; color:#fff; border:none; padding:12px 24px; border-radius:6px; font-weight:bold; font-size:14px; } QPushButton:hover { background-color:#1e7e34; } QPushButton:disabled { background-color:#cccccc; color:#666666; }""")
         process_layout.addWidget(self.btn_process)
-        
-        # Barre de progression
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 2px solid #cccccc;
-                border-radius: 5px;
-                text-align: center;
-            }
-            QProgressBar::chunk {
-                background-color: #0066cc;
-                border-radius: 3px;
-            }
-        """)
+        self.progress_bar = QProgressBar(); self.progress_bar.setVisible(False)
+        self.progress_bar.setStyleSheet("""QProgressBar { border:2px solid #cccccc; border-radius:5px; text-align:center; } QProgressBar::chunk { background-color:#0066cc; border-radius:3px; }""")
         process_layout.addWidget(self.progress_bar)
-        
         main_layout.addWidget(process_group)
-        
-        # Zone de logs
+
+        # Groupe logs
         logs_group = QGroupBox("Journal d'activité")
-        logs_group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        logs_layout = QVBoxLayout(logs_group)
-        
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(200)
-        self.log_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #f8f9fa;
-                border: 1px solid #dee2e6;
-                border-radius: 4px;
-                font-family: 'Courier New', monospace;
-                font-size: 10px;
-            }
-        """)
+        logs_layout = QVBoxLayout(logs_group); logs_layout.setSpacing(10); logs_layout.setContentsMargins(18,16,18,16)
+        self.log_text = QTextEdit(); self.log_text.setReadOnly(True); self.log_text.setMinimumHeight(180)
+        self.log_text.setStyleSheet("""QTextEdit { background-color:rgba(0,0,0,0.03); border:1px solid rgba(0,0,0,0.12); border-radius:6px; font-family:'JetBrains Mono','Courier New',monospace; font-size:11px; padding:6px; }""")
         self.log_message("Interface initialisée. Prêt à traiter les doublons.")
         logs_layout.addWidget(self.log_text)
-        
-        main_layout.addWidget(logs_group)
-        
+        logs_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        main_layout.addWidget(logs_group, 1)
+
         # Footer
-        footer_label = QLabel("© 2025 GND Yoann BAUDRIN - PJGN/FAED")
-        footer_label.setAlignment(Qt.AlignCenter)
-        footer_label.setStyleSheet("color: #999999; font-size: 10px; margin-top: 10px;")
+        footer_label = QLabel("© 2025 GND Yoann BAUDRIN - PJGN/FAED • v1.0"); footer_label.setAlignment(Qt.AlignCenter); footer_label.setObjectName("FooterLabel")
         main_layout.addWidget(footer_label)
-        
-        # Vérifier les fichiers à l'initialisation
+
+        # Initialisations finales
         self.check_ready_to_process()
+        self.apply_card_effects([csv_group, export_group, process_group, logs_group])
+        self._responsive_groups = [csv_group, export_group, process_group, logs_group]
+        self._responsive_group_layouts = [csv_layout, export_layout, process_layout, logs_layout]
+        self.apply_responsive_metrics(self.width())
+
+    def apply_responsive_metrics(self, width):
+        """Adapte dynamiquement marges / espacements selon largeur."""
+        if width < 700:
+            outer_m = (12, 12, 12, 12)
+            spacing = 12
+            group_m = (12, 10, 12, 10)
+        elif width < 900:
+            outer_m = (20, 20, 20, 20)
+            spacing = 18
+            group_m = (14, 12, 14, 12)
+        elif width < 1200:
+            outer_m = (32, 28, 32, 28)
+            spacing = 24
+            group_m = (18, 16, 18, 16)
+        else:
+            outer_m = (72, 40, 72, 48)
+            spacing = 36
+            group_m = (22, 18, 22, 18)
+        self.main_layout.setContentsMargins(*outer_m)
+        self.main_layout.setSpacing(spacing)
+        for lay in self._responsive_group_layouts:
+            lay.setContentsMargins(*group_m)
+        # Ajustement rayon ombre léger selon taille
+        for g in self._responsive_groups:
+            eff = g.graphicsEffect()
+            if eff:
+                eff.setBlurRadius(18 if width < 900 else 24)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        try:
+            self.apply_responsive_metrics(event.size().width())
+        except Exception:
+            pass
+    
+    def apply_card_effects(self, widgets):
+        """Ajoute une ombre portée légère aux cadres."""
+        for w in widgets:
+            effect = QGraphicsDropShadowEffect(self)
+            effect.setBlurRadius(20)
+            effect.setXOffset(0)
+            effect.setYOffset(4)
+            # Couleur adaptée selon thème
+            if self.current_theme == "dark":
+                effect.setColor(QColor(0, 0, 0, 160))
+            else:
+                effect.setColor(QColor(0, 0, 0, 50))
+            w.setGraphicsEffect(effect)
+    
+    def toggle_theme(self):
+        self.current_theme = "dark" if self.current_theme == "light" else "light"
+        self.apply_theme(self.current_theme)
+        self.apply_card_effects([
+            *self.findChildren(QGroupBox)
+        ])
+        self.update_theme_icon()
+        self.statusBar().showMessage(f"Thème {self.current_theme}", 3000)
+        self.save_settings()
+    
+    def apply_theme(self, theme):
+        """Applique un thème clair ou sombre moderne."""
+        accent = "#1d72b8"
+        danger = "#dc3545"
+        success = "#2e8540"
+        warning = "#f0ad4e"
+        if theme == "dark":
+            bg = "#12181f"
+            surface = "#1e2731"
+            border = "#2e3a47"
+            text = "#e5ecf1"
+            secondary = "#96a3b0"
+            header_grad = "linear-gradient(45deg, #203040, #162029)"
+        else:
+            bg = "#f4f6f9"
+            surface = "#ffffff"
+            border = "#d0d7de"
+            text = "#1f2d3d"
+            secondary = "#5f6b76"
+            header_grad = "linear-gradient(90deg, #1d72b8, #2396ef)"
+        stylesheet = f"""
+        QMainWindow {{ background: {bg}; }}
+        #HeaderFrame {{
+            background: {header_grad};
+            border-radius: 14px;
+            color: #ffffff;
+        }}
+        #AppTitle {{ color: #ffffff; letter-spacing:0.5px; }}
+        #AppSubtitle {{ color: rgba(255,255,255,0.85); font-size:12px; }}
+        QGroupBox {{
+            background: {surface};
+            border: 1px solid {border};
+            border-radius: 12px;
+            margin-top: 16px;
+            font-weight:600;
+            padding: 16px 16px 12px 16px;
+        }}
+        QGroupBox::title {{
+            subcontrol-origin: margin;
+            left: 14px;
+            padding: 2px 6px 4px 6px;
+            color: {text};
+            background: transparent;
+        }}
+        QLabel {{ color: {text}; }}
+        #InfoLabel {{ color: {secondary}; font-style:italic; }}
+        #FooterLabel {{ color: {secondary}; font-size:11px; margin-top:8px; }}
+        QLineEdit {{
+            background: {surface};
+            border: 2px solid {border};
+            border-radius: 8px;
+            padding: 8px 10px;
+            color: {text};
+            selection-background-color: {accent};
+            selection-color: #ffffff;
+        }}
+        QLineEdit:focus {{ border-color: {accent}; }}
+        QPushButton {{
+            border-radius: 8px;
+            padding: 8px 18px;
+            font-weight:600;
+            background: {accent};
+            color: #ffffff;
+        }}
+        QPushButton:hover:!disabled {{ background: shade({accent}, 110); }}
+        QPushButton:pressed {{ background: shade({accent}, 130); }}
+        QPushButton:disabled {{ background: {border}; color: {secondary}; }}
+        QProgressBar {{
+            background: {surface};
+            border: 1px solid {border};
+            border-radius: 8px;
+            text-align: center;
+            color: {text};
+        }}
+        QProgressBar::chunk {{
+            background: {accent};
+            border-radius: 6px;
+        }}
+        QMessageBox {{ background: {surface}; }}
+        QScrollBar:vertical {{
+            background: transparent; width:10px; margin:2px; border-radius:5px;
+        }}
+        QScrollBar::handle:vertical {{ background: {border}; border-radius:5px; min-height:24px; }}
+        QScrollBar::handle:vertical:hover {{ background: {accent}; }}
+        QTextEdit {{ color: {text}; }}
+        """
+        self.setStyleSheet(stylesheet)
+        # Boutons spécifiques (process already styled in init but we override partly)
+        # Coloration dynamique des labels d'état
+        if "valide" in self.csv_info_label.text().lower():
+            self.csv_info_label.setStyleSheet(f"color: {success}; font-style:italic;")
+        if "rapports" in self.export_info_label.text().lower():
+            self.export_info_label.setStyleSheet(f"color: {success}; font-style:italic;")
+
+    def build_theme_icon(self, theme: str) -> QIcon:
+        """Construit un QIcon (soleil ou lune) en vectoriel simple selon le thème cible."""
+        size = 64
+        pm = QPixmap(size, size)
+        pm.fill(Qt.transparent)
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        if theme == "dark":
+            # Afficher une lune (croissant clair) pour indiquer qu'on peut aller vers le thème clair
+            outer_rect = QRectF(size*0.18, size*0.14, size*0.56, size*0.56)
+            inner_rect = QRectF(size*0.34, size*0.14, size*0.56, size*0.56)
+            path_outer = QPainterPath(); path_outer.addEllipse(outer_rect)
+            path_inner = QPainterPath(); path_inner.addEllipse(inner_rect)
+            crescent = path_outer.subtracted(path_inner)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(255,255,255))
+            painter.drawPath(crescent)
+        else:
+            # Soleil (indique possibilité basculer sombre)
+            center = QPointF(size/2, size/2)
+            radius = size * 0.22
+            core_color = QColor(255, 191, 0)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(core_color)
+            painter.drawEllipse(QRectF(center.x()-radius, center.y()-radius, radius*2, radius*2))
+            # Rayons
+            painter.setPen(QPen(core_color, size*0.05, Qt.SolidLine, Qt.RoundCap))
+            for i in range(12):
+                angle = 2 * math.pi * i / 12
+                r1 = radius + size*0.06
+                r2 = radius + size*0.18
+                p1 = QPointF(center.x() + r1*math.cos(angle), center.y() + r1*math.sin(angle))
+                p2 = QPointF(center.x() + r2*math.cos(angle), center.y() + r2*math.sin(angle))
+                painter.drawLine(p1, p2)
+
+        painter.end()
+        return QIcon(pm)
+
+    def update_theme_icon(self):
+        self.btn_toggle_theme.setIcon(self.build_theme_icon(self.current_theme))
+        self.btn_toggle_theme.setIconSize(self.btn_toggle_theme.size()*0.6)
+    
+    def load_settings(self):
+        """Charge les préférences utilisateur (chemins & thème)."""
+        last_csv = self.settings.value("last_csv", "")
+        last_export = self.settings.value("last_export", "")
+        theme = self.settings.value("theme", "light")
+        self.current_theme = theme
+        if last_csv and os.path.exists(last_csv):
+            self.chemin_fichier_csv = last_csv
+            self.csv_path_edit.setText(last_csv)
+        if last_export and os.path.isdir(last_export):
+            self.dossier_exports = last_export
+            self.export_path_edit.setText(last_export)
+        self.check_ready_to_process()
+    
+    def save_settings(self):
+        self.settings.setValue("last_csv", self.chemin_fichier_csv)
+        self.settings.setValue("last_export", self.dossier_exports)
+        self.settings.setValue("theme", self.current_theme)
         
     def log_message(self, message):
         """Ajoute un message au journal d'activité"""
@@ -291,7 +438,7 @@ class DoublonsIDPPGUI(QMainWindow):
                 if df is not None:
                     nb_lignes = len(df)
                     self.csv_info_label.setText(f"Fichier valide: {nb_lignes} signalisations détectées.")
-                    self.csv_info_label.setStyleSheet("color: #28a745; font-style: italic;")
+                    # style dynamique dans apply_theme
                     self.log_message(f"Fichier valide: {nb_lignes} signalisations trouvées.")
                 else:
                     self.csv_info_label.setText("Erreur: Impossible de lire le fichier CSV.")
@@ -303,6 +450,7 @@ class DoublonsIDPPGUI(QMainWindow):
                 self.log_message(f"Erreur lors de la vérification du fichier: {str(e)}")
             
             self.check_ready_to_process()
+            self.save_settings()
             
     def select_export_directory(self):
         """Ouvre un dialogue pour sélectionner le dossier d'export"""
@@ -318,6 +466,7 @@ class DoublonsIDPPGUI(QMainWindow):
             self.export_info_label.setText(f"Les rapports seront enregistrés dans: {directory}")
             self.export_info_label.setStyleSheet("color: #28a745; font-style: italic;")
             self.check_ready_to_process()
+            self.save_settings()
             
     def check_ready_to_process(self):
         """Vérifie si tous les éléments sont prêts pour le traitement"""
@@ -363,7 +512,8 @@ class DoublonsIDPPGUI(QMainWindow):
         """Active/désactive les éléments de l'interface"""
         self.btn_select_csv.setEnabled(enabled)
         self.btn_select_export.setEnabled(enabled)
-        self.btn_process.setEnabled(enabled and self.chemin_fichier_csv and self.dossier_exports)
+        # Garantir un bool strict (et non la dernière chaîne évaluée) pour setEnabled
+        self.btn_process.setEnabled(bool(enabled and self.chemin_fichier_csv and self.dossier_exports))
         
     def update_progress(self, message):
         """Met à jour le journal avec les messages de progression"""
@@ -382,6 +532,7 @@ class DoublonsIDPPGUI(QMainWindow):
             self.log_message("TRAITEMENT TERMINÉ AVEC SUCCÈS!")
             self.log_message("Les fichiers de rapport ont été générés.")
             self.log_message("=" * 50)
+            self.statusBar().showMessage("Traitement terminé avec succès", 5000)
             
             # Afficher une boîte de dialogue de succès
             msg_box = QMessageBox(self)
@@ -405,6 +556,7 @@ class DoublonsIDPPGUI(QMainWindow):
             self.log_message("ERREUR LORS DU TRAITEMENT!")
             self.log_message(message)
             self.log_message("=" * 50)
+            self.statusBar().showMessage("Erreur de traitement", 5000)
             
             QMessageBox.critical(self, "Erreur de traitement", 
                                f"Une erreur est survenue lors du traitement:\n\n{message}")
