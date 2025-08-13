@@ -374,9 +374,16 @@ def filtrer_idpp_pn(df):
     
     return df_a_traiter, df_pn, nb_gn, nb_pn, nb_autres
 
-def traiter_doublons(chemin_fichier):
+def traiter_doublons(chemin_fichier, dossier_exports=None):
     """
     Fonction principale pour traiter les doublons selon l'algorithme spécifié.
+    
+    Args:
+        chemin_fichier (str): Chemin vers le fichier CSV à traiter
+        dossier_exports (str, optional): Dossier de destination pour les exports
+    
+    Returns:
+        DataFrame: Le DataFrame traité avec les colonnes de décision
     """
     # 1. Lecture du fichier CSV
     df = lire_fichier_csv(chemin_fichier)
@@ -484,7 +491,7 @@ def traiter_doublons(chemin_fichier):
     df_traite.name = chemin_fichier
     
     # 5. Générer les résultats
-    generer_resultats(df_traite)
+    generer_resultats(df_traite, dossier_exports)
     
     return df_traite
 
@@ -554,15 +561,16 @@ def demander_dossier_export():
         else:
             print("Choix invalide. Veuillez entrer 1 ou 2.")
 
-def generer_resultats(df):
+def generer_resultats(df, dossier_exports_base=None):
     """
     Génère trois fichiers en sortie:
     1. Un rapport des signalisations conservées avec motifs de conservation
     2. Un rapport des signalisations doublons avec motifs de classement
     3. Un fichier CSV contenant uniquement les NUMERO_SIGNALISATION à supprimer
     """
-    # Demander à l'utilisateur où enregistrer les exports
-    dossier_exports_base = demander_dossier_export()
+    # Si aucun dossier n'est spécifié, demander à l'utilisateur
+    if dossier_exports_base is None:
+        dossier_exports_base = demander_dossier_export()
     
     # Créer un timestamp pour les noms de fichiers et un format plus lisible
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
