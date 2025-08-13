@@ -616,10 +616,15 @@ def generer_resultats(df, dossier_exports_base=None):
     # 1. Rapport des signalisations conservées
     signalisations_conservees = df_sans_pn[df_sans_pn['A_SUPPRIMER'] == False]
     rapport_conservees = signalisations_conservees[colonnes_disponibles]
-    
-    # Trier le rapport des conservées par ID_GROUPE pour faciliter l'analyse
+
+    # Trier d'abord (même si ID_GROUPE sera retiré de l'export)
     if 'ID_GROUPE' in rapport_conservees.columns:
         rapport_conservees = rapport_conservees.sort_values(by=['ID_GROUPE', 'NUMERO_SIGNALISATION'])
+
+    # Retirer les colonnes demandées uniquement pour R1
+    for col_drop in ['ID_GROUPE', 'REGLE_APPLIQUEE']:
+        if col_drop in rapport_conservees.columns:
+            rapport_conservees.drop(columns=col_drop, inplace=True)
     
     # Nouveau nom: R1_Signalisations_conservees—{DDMOISAAAA}_{HH}h{MM}.csv
     nom_fichier_conservees = f'R1_Signalisations_conservees—{date_token_humain}.csv'
@@ -629,9 +634,8 @@ def generer_resultats(df, dossier_exports_base=None):
     # Ajouter un en-tête explicatif
     description_conservees = (
         "Ce fichier contient toutes les signalisations qui ont été CONSERVÉES après analyse des doublons.\n"
-        "# La colonne 'REGLE_APPLIQUEE' indique la règle qui a été utilisée pour conserver cette signalisation.\n"
-        "# La colonne 'DETAIL_REGLE' fournit une explication détaillée de la décision.\n"
-        "# La colonne 'ID_GROUPE' permet d'identifier les groupes de doublons (même valeur = même groupe)."
+        "# Conformément à la demande, les colonnes 'ID_GROUPE' et 'REGLE_APPLIQUEE' ont été retirées de ce rapport.\n"
+        "# La colonne 'DETAIL_REGLE' fournit une explication de la décision de conservation."
     )
     ajouter_entete_csv(chemin_complet_conservees, "SIGNALISATIONS CONSERVÉES", description_conservees)
     print(f"Rapport des signalisations conservées généré: {chemin_complet_conservees} ({len(rapport_conservees)} signalisations)")
@@ -639,10 +643,15 @@ def generer_resultats(df, dossier_exports_base=None):
     # 2. Rapport des signalisations considérées comme doublons (sans PN)
     signalisations_doublons = df_sans_pn[df_sans_pn['A_SUPPRIMER'] == True]
     rapport_doublons = signalisations_doublons[colonnes_disponibles]
-    
-    # Trier le rapport des doublons par ID_GROUPE pour faciliter l'analyse
+
+    # Trier d'abord (même si ID_GROUPE sera retiré de l'export)
     if 'ID_GROUPE' in rapport_doublons.columns:
         rapport_doublons = rapport_doublons.sort_values(by=['ID_GROUPE', 'NUMERO_SIGNALISATION'])
+
+    # Retirer les colonnes demandées uniquement pour R2
+    for col_drop in ['ID_GROUPE', 'REGLE_APPLIQUEE']:
+        if col_drop in rapport_doublons.columns:
+            rapport_doublons.drop(columns=col_drop, inplace=True)
     
     # Nouveau nom: R2_Signalisations_a_supprimer—{DDMOISAAAA}_{HH}h{MM}.csv
     nom_fichier_doublons = f'R2_Signalisations_a_supprimer—{date_token_humain}.csv'
@@ -652,9 +661,8 @@ def generer_resultats(df, dossier_exports_base=None):
     # Ajouter un en-tête explicatif
     description_doublons = (
         "Ce fichier contient toutes les signalisations qui ont été marquées comme DOUBLONS et qui doivent être SUPPRIMÉES.\n"
-        "# La colonne 'REGLE_APPLIQUEE' indique la règle qui a déterminé que cette signalisation est un doublon.\n"
-        "# La colonne 'DETAIL_REGLE' fournit une explication détaillée de la décision.\n"
-        "# La colonne 'ID_GROUPE' permet d'identifier les groupes de doublons (même valeur = même groupe).\n"
+        "# Conformément à la demande, les colonnes 'ID_GROUPE' et 'REGLE_APPLIQUEE' ont été retirées de ce rapport.\n"
+        "# La colonne 'DETAIL_REGLE' fournit toujours une explication de la décision de suppression.\n"
         "# Note: Les signalisations avec IDPP commençant par 'PN' ne sont pas incluses dans ce rapport."
     )
     ajouter_entete_csv(chemin_complet_doublons, "SIGNALISATIONS À SUPPRIMER", description_doublons)
@@ -715,10 +723,21 @@ def generer_resultats(df, dossier_exports_base=None):
     for regle, count in regles_appliquees.items():
         print(f"- {regle}: {count} signalisations")
     
-    # Résumé global (sans PN)
+    # Résumé global (sans PN) = GN + AUTRES (actuel)
     total_sans_pn = len(df_sans_pn)
     a_supprimer_sans_pn = len(df_sans_pn[df_sans_pn['A_SUPPRIMER'] == True])
     a_conserver_sans_pn = total_sans_pn - a_supprimer_sans_pn
+
+    # Pour cohérence d'affichage: utiliser le comptage GN initial (nb_gn) comme référence unique
+    total_gn_stats = nb_gn
+    # Recalculer suppressions/conservations GN sur le df_sans_pn (qui exclut PN mais contient GN + autres)
+    if 'IDENTIFIANT_GASPARD' in df_sans_pn.columns and 'A_SUPPRIMER' in df_sans_pn.columns:
+        masque_gn_stats = df_sans_pn['IDENTIFIANT_GASPARD'].astype(str).str.startswith('GN')
+        a_supprimer_gn = (df_sans_pn['A_SUPPRIMER'] & masque_gn_stats).sum()
+        a_conserver_gn = masque_gn_stats.sum() - a_supprimer_gn
+    else:
+        a_supprimer_gn = 0
+        a_conserver_gn = total_gn_stats
     
     # Pour information uniquement, garder le total avec PN
     total_avec_pn = len(df)
@@ -743,12 +762,16 @@ def generer_resultats(df, dossier_exports_base=None):
         .stats th {{ background-color: #f2f2f2; }}
         .files {{ margin: 20px 0; }}
         .files table {{ border-collapse: collapse; width: 100%; }}
-        .files th, .files td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+    .files th, .files td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
         .files th {{ background-color: #f2f2f2; }}
         .rules {{ margin: 20px 0; }}
         .rules table {{ border-collapse: collapse; width: 100%; }}
         .rules th, .rules td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
         .rules th {{ background-color: #f2f2f2; }}
+    .total td {{ font-weight: bold; background-color: #eef; }}
+    .files tr.indent td {{ background:#f7f7f7; color:#444; font-family: monospace; }}
+    .arrow-derives {{ color:#0066cc; font-weight:bold; }}
+    .legend {{ font-size:0.85em; color:#555; margin-top:6px; }}
         .footer {{ margin-top: 30px; font-size: 0.8em; color: #666; }}
         .note {{ color: #cc0000; margin: 15px 0; }}
     </style>
@@ -762,7 +785,7 @@ def generer_resultats(df, dossier_exports_base=None):
         <p><strong>Note importante:</strong> Les {nb_pn_exclus} signalisations avec IDPP commençant par 'PN' ont été exclues des statistiques et des rapports de suppression.</p>
     </div>
     
-    <h2>Statistiques globales (hors PN)</h2>
+    <h2>Statistiques globales GN</h2>
     <div class="stats">
         <table>
             <tr>
@@ -771,19 +794,19 @@ def generer_resultats(df, dossier_exports_base=None):
                 <th>Pourcentage</th>
             </tr>
             <tr>
-                <td>Total des signalisations (hors PN)</td>
-                <td>{total_sans_pn}</td>
+                <td>Total des signalisations GN</td>
+                <td>{total_gn_stats}</td>
                 <td>100%</td>
             </tr>
             <tr>
                 <td>Signalisations à conserver</td>
-                <td>{a_conserver_sans_pn}</td>
-                <td>{a_conserver_sans_pn/total_sans_pn*100:.1f}%</td>
+                <td>{a_conserver_gn}</td>
+                <td>{(a_conserver_gn/total_gn_stats*100) if total_gn_stats>0 else 0:.1f}%</td>
             </tr>
             <tr>
                 <td>Signalisations à supprimer</td>
-                <td>{a_supprimer_sans_pn}</td>
-                <td>{a_supprimer_sans_pn/total_sans_pn*100:.1f}%</td>
+                <td>{a_supprimer_gn}</td>
+                <td>{(a_supprimer_gn/total_gn_stats*100) if total_gn_stats>0 else 0:.1f}%</td>
             </tr>
             <tr>
                 <td>Nombre de groupes de doublons identifiés</td>
@@ -793,7 +816,7 @@ def generer_resultats(df, dossier_exports_base=None):
         </table>
     </div>
     
-    <h2>Répartition par type d'identifiant GASPARD</h2>
+    <h2>Répartition GN/PN selon l'identifiant GASPARD</h2>
     <div class="stats">
         <table>
             <tr>
@@ -823,7 +846,7 @@ def generer_resultats(df, dossier_exports_base=None):
         </table>
     </div>
     
-    <h2>Détail des règles appliquées (hors PN)</h2>
+    <h2>Détail des règles appliquées</h2>
     <div class="rules">
         <table>
             <tr>
@@ -842,7 +865,16 @@ def generer_resultats(df, dossier_exports_base=None):
                 <td>{count}</td>
                 <td>{pourcentage:.1f}%</td>
             </tr>"""
-    
+    # Ligne total règles
+    total_regles = regles_appliquees.sum()
+    if total_regles > 0:
+        html_content += f"""
+            <tr class=\"total\">
+                <td>TOTAL</td>
+                <td>{total_regles}</td>
+                <td>100%</td>
+            </tr>"""
+
     html_content += """
         </table>
     </div>
@@ -856,6 +888,8 @@ def generer_resultats(df, dossier_exports_base=None):
                 <th>Nombre d'enregistrements</th>
             </tr>"""
     
+    # Total limité aux rapports R1 + R2 seulement (exclusion des paquets)
+    total_enregistrements = len(rapport_conservees) + len(rapport_doublons)
     html_content += f"""
             <tr>
                 <td>{nom_fichier_conservees}</td>
@@ -867,14 +901,20 @@ def generer_resultats(df, dossier_exports_base=None):
                 <td>Rapport détaillé des signalisations à supprimer</td>
                 <td>{len(rapport_doublons)}</td>
             </tr>
-            <!-- Fichiers de listes simplifiées -->
-            {''.join(f'<tr><td>{f}</td><td>Liste simplifiée des numéros à supprimer (bloc)</td><td>{c}</td></tr>' for f,c in fichiers_listes)}
+            <!-- Fichiers de listes simplifiées (indents visuels) -->
+            {''.join(f'<tr class="indent"><td><span class="arrow-derives">↘</span>&nbsp;{f}</td><td>&nbsp;&nbsp;Paquet de suppression (issu de R2)</td><td>&nbsp;&nbsp;{c}</td></tr>' for f,c in fichiers_listes)}
+            <tr class=\"total\">
+                <td>TOTAL</td>
+                <td>Enregistrements cumulés</td>
+                <td>{total_enregistrements}</td>
+            </tr>
         </table>
+        <p class="legend"><span class="arrow-derives">↘</span> Paquets de suppression dérivés du rapport R2 (découpage en blocs de 500 numéros).</p>
     </div>
     
     <div class="footer">
         <p>Ce rapport a été généré automatiquement par le script de traitement des doublons de signalisations développé par le GND Yoann BAUDRIN.</p>
-        <p>Pôle Judiciaire de la Gendarmerie Nationale - Département du Fichier Automatisé des Empreintes Digitales.</p>
+        <p>Gendarmerie Nationale - Département du Fichier Automatisé des Empreintes Digitales.</p>
         <p>Tous les fichiers se trouvent dans le dossier: {dossier_exports}</p>
     </div>
 </body>
@@ -893,28 +933,28 @@ def generer_resultats(df, dossier_exports_base=None):
     with open(chemin_complet_resume_txt, 'w', encoding='utf-8') as f:
         f.write(f"RÉSUMÉ DU TRAITEMENT DES DOUBLONS IDPP - {date_lisible}\n")
         f.write("="*80 + "\n\n")
-        
+
         f.write("INFORMATIONS GÉNÉRALES\n")
         f.write("-"*80 + "\n")
         f.write(f"Fichier traité: {os.path.basename(df.name) if hasattr(df, 'name') else 'Inconnu'}\n")
         f.write(f"Date et heure du traitement: {date_lisible}\n")
         f.write(f"Dossier des exports: {dossier_exports}\n")
         f.write(f"Note: Les {nb_pn_exclus} signalisations avec IDPP commençant par 'PN' ont été exclues des statistiques.\n\n")
-        
-        f.write("STATISTIQUES GLOBALES (HORS PN)\n")
+
+        f.write("STATISTIQUES GLOBALES GN\n")
         f.write("-"*80 + "\n")
-        f.write(f"Total des signalisations (hors PN): {total_sans_pn}\n")
-        f.write(f"Signalisations à conserver: {a_conserver_sans_pn} ({a_conserver_sans_pn/total_sans_pn*100:.1f}%)\n" if total_sans_pn > 0 else "Signalisations à conserver: 0 (0.0%)\n")
-        f.write(f"Signalisations à supprimer: {a_supprimer_sans_pn} ({a_supprimer_sans_pn/total_sans_pn*100:.1f}%)\n" if total_sans_pn > 0 else "Signalisations à supprimer: 0 (0.0%)\n")
+        f.write(f"Total des signalisations GN: {total_gn_stats}\n")
+        f.write(f"Signalisations GN à conserver: {a_conserver_gn} ({a_conserver_gn/total_gn_stats*100:.1f}%)\n" if total_gn_stats > 0 else "Signalisations GN à conserver: 0 (0.0%)\n")
+        f.write(f"Signalisations GN à supprimer: {a_supprimer_gn} ({a_supprimer_gn/total_gn_stats*100:.1f}%)\n" if total_gn_stats > 0 else "Signalisations GN à supprimer: 0 (0.0%)\n")
         f.write(f"Nombre de groupes de doublons identifiés: {nb_groupes}\n\n")
-        
+
         f.write("RÉPARTITION PAR TYPE D'IDENTIFIANT GASPARD\n")
         f.write("-"*80 + "\n")
         f.write(f"- Signalisations GN: {nb_gn} ({nb_gn/total_avec_pn*100:.1f}% du total général) - Analysées pour doublons\n" if total_avec_pn > 0 else "- Signalisations GN: 0 (0.0%)\n")
         f.write(f"- Signalisations PN: {nb_pn} ({nb_pn/total_avec_pn*100:.1f}% du total général) - Exclues automatiquement\n" if total_avec_pn > 0 else "- Signalisations PN: 0 (0.0%)\n")
         if nb_autres > 0:
             f.write(f"- Autres formats d'IDPP: {nb_autres} ({nb_autres/total_avec_pn*100:.1f}% du total général) - Analysées pour doublons\n" if total_avec_pn > 0 else f"- Autres formats d'IDPP: {nb_autres} (0.0%)\n")
-        
+
         f.write("\nDÉTAIL DES RÈGLES APPLIQUÉES (HORS PN)\n")
         f.write("-"*80 + "\n")
         for regle, count in regles_appliquees.items():
