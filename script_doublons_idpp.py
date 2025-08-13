@@ -592,7 +592,7 @@ def generer_resultats(df, dossier_exports_base=None):
 
     # Sous-dossiers demandés
     rapports_dir = os.path.join(dossier_exports, "Rapports")
-    listes_dir = os.path.join(dossier_exports, "Listes de suppressions")
+    listes_dir = os.path.join(dossier_exports, "Paquets de suppressions")
     os.makedirs(rapports_dir, exist_ok=True)
     os.makedirs(listes_dir, exist_ok=True)
     
@@ -660,26 +660,45 @@ def generer_resultats(df, dossier_exports_base=None):
     ajouter_entete_csv(chemin_complet_doublons, "SIGNALISATIONS À SUPPRIMER", description_doublons)
     print(f"Rapport des signalisations à supprimer généré: {chemin_complet_doublons} ({len(rapport_doublons)} signalisations)")
     
-    # 3. Liste simplifiée des numéros de signalisation à supprimer (pour import dans le système)
-    nom_fichier_liste = f'LISTE_Numeros_Signalisations_A_Supprimer—{date_token_humain}.csv'
-    chemin_complet_liste = os.path.join(listes_dir, nom_fichier_liste)
-    
-    # Créer un DataFrame simplifié avec moins de colonnes pour l'importation dans les systèmes
-    colonnes_liste = ['NUMERO_SIGNALISATION', 'IDENTIFIANT_GASPARD', 'NOM', 'PRENOM', 'REGLE_APPLIQUEE']
-    colonnes_liste_disponibles = [col for col in colonnes_liste if col in df_sans_pn.columns]
-    
-    df_liste = df_sans_pn[df_sans_pn['A_SUPPRIMER'] == True][colonnes_liste_disponibles]
-    df_liste.to_csv(chemin_complet_liste, index=False, encoding='utf-8')
-    
-    # Ajouter un en-tête explicatif
-    description_liste = (
-        "Ce fichier contient uniquement les NUMÉROS DE SIGNALISATION à supprimer.\n"
-        "# Il est conçu pour être facilement importé dans votre système de gestion.\n"
-        "# Pour plus de détails sur les raisons de suppression, consultez le fichier de rapport complet.\n"
-        "# Note: Les signalisations avec IDPP commençant par 'PN' ne sont pas incluses dans cette liste."
-    )
-    ajouter_entete_csv(chemin_complet_liste, "LISTE DES NUMÉROS DE SIGNALISATION À SUPPRIMER", description_liste)
-    print(f"Liste des signalisations à supprimer générée: {chemin_complet_liste} ({len(df_liste)} signalisations)")
+    # 3. Listes simplifiées des numéros de signalisation à supprimer (fichiers .txt par blocs de 500)
+    if 'NUMERO_SIGNALISATION' in df_sans_pn.columns:
+        df_liste = df_sans_pn.loc[df_sans_pn['A_SUPPRIMER'] == True, ['NUMERO_SIGNALISATION']].copy()
+        col_num = 'NUMERO_SIGNALISATION'
+    else:
+        # fallback tentative de détection
+        df_liste = df_sans_pn.loc[df_sans_pn['A_SUPPRIMER'] == True].copy()
+        possibles = [c for c in df_liste.columns if c.lower() == 'numero_signalisation']
+        col_num = possibles[0] if possibles else df_liste.columns[0]
+        if possibles:
+            df_liste = df_liste[[col_num]]
+        else:
+            df_liste = df_liste[[col_num]]
+    numeros_list = df_liste[col_num].astype(str).tolist()
+    total_nums = len(numeros_list)
+    chunk_size = 500
+    fichiers_listes = []
+    if total_nums == 0:
+        # Créer un fichier vide pour indiquer absence
+        nom_fichier_liste_vide = f'PAQUET01-SUPPRESSION.txt'
+        chemin_vide = os.path.join(listes_dir, nom_fichier_liste_vide)
+        open(chemin_vide, 'w', encoding='utf-8').close()
+        fichiers_listes.append((nom_fichier_liste_vide, 0))
+        print("Aucun numéro à supprimer: fichier vide créé.")
+    else:
+        nb_chunks = (total_nums + chunk_size - 1) // chunk_size
+        for i in range(nb_chunks):
+            start = i * chunk_size
+            end = min(start + chunk_size, total_nums)
+            bloc = numeros_list[start:end]
+            nom_fichier_liste_part = f'PAQUET{i+1:02d}-SUPPRESSION.txt'
+            chemin_part = os.path.join(listes_dir, nom_fichier_liste_part)
+            with open(chemin_part, 'w', encoding='utf-8') as fpart:
+                fpart.write("\n".join(bloc) + ("\n" if bloc else ""))
+            fichiers_listes.append((nom_fichier_liste_part, len(bloc)))
+        print(f"Listes des signalisations à supprimer générées: {len(fichiers_listes)} fichier(s), total {total_nums} signalisations")
+    # Pour compatibilité avec le reste du code (résumés) on garde une variable représentant le total & première liste
+    nom_fichier_liste = fichiers_listes[0][0] if fichiers_listes else ''
+    df_liste_count = total_nums
     
     # Statistiques sur les groupes de doublons (sans compter les PN)
     groupes_avec_doublons = df_sans_pn[df_sans_pn['ID_GROUPE'] != "Aucun"]['ID_GROUPE'].unique()
@@ -848,11 +867,8 @@ def generer_resultats(df, dossier_exports_base=None):
                 <td>Rapport détaillé des signalisations à supprimer</td>
                 <td>{len(rapport_doublons)}</td>
             </tr>
-            <tr>
-                <td>{nom_fichier_liste}</td>
-                <td>Liste simplifiée des numéros de signalisation à supprimer</td>
-                <td>{len(df_liste)}</td>
-            </tr>
+            <!-- Fichiers de listes simplifiées -->
+            {''.join(f'<tr><td>{f}</td><td>Liste simplifiée des numéros à supprimer (bloc)</td><td>{c}</td></tr>' for f,c in fichiers_listes)}
         </table>
     </div>
     
@@ -909,7 +925,11 @@ def generer_resultats(df, dossier_exports_base=None):
         f.write("-"*80 + "\n")
         f.write(f"1. {nom_fichier_conservees}\n   - Rapport détaillé des signalisations conservées ({len(rapport_conservees)} signalisations)\n\n")
         f.write(f"2. {nom_fichier_doublons}\n   - Rapport détaillé des signalisations à supprimer ({len(rapport_doublons)} signalisations)\n\n")
-        f.write(f"3. {nom_fichier_liste}\n   - Liste simplifiée des numéros de signalisation à supprimer ({len(df_liste)} signalisations)\n\n")
+        # Fichiers de listes simplifiées
+        f.write("3. LISTES SIMPLIFIEES DES NUMEROS A SUPPRIMER\n")
+        for f_liste, count_liste in fichiers_listes:
+            f.write(f"   - {f_liste} : {count_liste} numéros\n")
+        f.write(f"   Total: {df_liste_count} numéros\n\n")
         f.write(f"4. {nom_fichier_resume}\n   - Résumé du traitement au format HTML (plus lisible)\n\n")
         
         f.write("="*80 + "\n")
