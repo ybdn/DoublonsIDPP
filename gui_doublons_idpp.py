@@ -176,7 +176,14 @@ class DoublonsIDPPGUI(QMainWindow):
         logs_group = QGroupBox("Journal d'activité")
         logs_layout = QVBoxLayout(logs_group); logs_layout.setSpacing(10); logs_layout.setContentsMargins(18,16,18,16)
         self.log_text = QTextEdit(); self.log_text.setReadOnly(True); self.log_text.setMinimumHeight(180)
-        self.log_text.setStyleSheet("""QTextEdit { background-color:rgba(0,0,0,0.03); border:1px solid rgba(0,0,0,0.12); border-radius:6px; font-family:'JetBrains Mono','Courier New',monospace; font-size:11px; padding:6px; }""")
+        # Style du journal: suppression de la dépendance stricte à JetBrains Mono
+        # Une tentative de chargement optionnelle est faite plus bas (méthode load_optional_mono_font)
+        self.log_text.setStyleSheet(
+            "QTextEdit { background-color: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.12); border-radius:6px; "
+            "font-family: 'Menlo','SF Mono','Courier New',monospace; font-size:11px; padding:6px; }"
+        )
+        # Chargement optionnel d'une police JetBrains Mono locale si disponible
+        self.load_optional_mono_font()
         self.log_message("Interface initialisée. Prêt à traiter les doublons.")
         logs_layout.addWidget(self.log_text)
         logs_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
@@ -192,6 +199,33 @@ class DoublonsIDPPGUI(QMainWindow):
         self._responsive_groups = [csv_group, export_group, process_group, logs_group]
         self._responsive_group_layouts = [csv_layout, export_layout, process_layout, logs_layout]
         self.apply_responsive_metrics(self.width())
+
+    def load_optional_mono_font(self):
+        """Charge JetBrains Mono si un fichier .ttf est présent dans un dossier 'fonts' à la racine.
+        Ne fait rien en cas d'échec. Permet de réduire l'avertissement Qt.
+        """
+        try:
+            from PyQt5.QtGui import QFontDatabase
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            fonts_dir = os.path.join(base_dir, 'fonts')
+            if not os.path.isdir(fonts_dir):
+                return
+            loaded_any = False
+            for fname in os.listdir(fonts_dir):
+                if fname.lower().startswith('jetbrainsmono') and fname.lower().endswith('.ttf'):
+                    path = os.path.join(fonts_dir, fname)
+                    if QFontDatabase.addApplicationFont(path) != -1:
+                        loaded_any = True
+            if loaded_any:
+                # Appliquer JetBrains Mono comme première option désormais disponible
+                base_style = (
+                    "QTextEdit { background-color: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.12); border-radius:6px; "
+                    "font-family: 'JetBrains Mono','Menlo','SF Mono','Courier New',monospace; font-size:11px; padding:6px; }"
+                )
+                self.log_text.setStyleSheet(base_style)
+        except Exception as e:
+            # Log discret dans la sortie standard pour debug, sans interrompre l'UI
+            print(f"[INFO] Impossible de charger JetBrains Mono optionnelle: {e}")
 
     def apply_responsive_metrics(self, width):
         """Adapte dynamiquement marges / espacements selon largeur."""
