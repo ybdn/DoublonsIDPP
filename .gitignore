@@ -117,6 +117,7 @@ validation_test.*
 
 # Generated output files
 *.html
+resultats.txt
 
 # macOS metadata
 .DS_Store
