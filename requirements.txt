@@ -1,5 +1,5 @@
-# Dépendances pour DoublonsIDPP
-numpy==2.3.2
-pandas==2.3.1
-PyQt5==5.15.11
+# Dépendances pour DoublonsIDPP (compat Ubuntu avec NumPy 2.2.x)
+numpy>=2.2.2,<2.4
+pandas>=2.3.1,<2.4
+PyQt5>=5.15.11,<5.16
 # PyQt5-Qt5 et PyQt5-sip sont installés automatiquement comme dépendances
